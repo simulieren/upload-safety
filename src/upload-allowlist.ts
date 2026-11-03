@@ -433,9 +433,31 @@ export function getExtension( filename: string ): string {
 	return filename.slice( lastDot + 1 ).toLowerCase();
 }
 
-/** Longest file name kept; longer ones are cut before the extension. */
-const MAX_FILENAME_LENGTH = 200;
+/**
+ * Longest file name kept, in UTF-8 bytes, as file systems count them (most allow 255); longer
+ * ones are cut before the extension.
+ */
+const MAX_FILENAME_BYTES = 200;
 const FALLBACK_FILENAME = 'file';
+// Windows opens a device instead of a file for these names, whatever follows the first dot.
+const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])$/i;
+// Windows drops trailing dots and spaces on saving, so the file would get another name than shown.
+const EDGE_DOTS_AND_SPACES = /^ +|[. ]+$/g;
+const GRAPHEMES = new Intl.Segmenter();
+
+/** The longest start of `text` that fits in `maxBytes` of UTF-8 without splitting a character. */
+function truncateUtf8( text: string, maxBytes: number ): string {
+	let kept = '';
+	let bytes = 0;
+	for ( const { segment } of GRAPHEMES.segment( text ) ) {
+		bytes += Buffer.byteLength( segment );
+		if ( bytes > maxBytes ) {
+			break;
+		}
+		kept += segment;
+	}
+	return kept;
+}
 
 /** Strips directory components and control characters from a user filename. */
 export function sanitizeFilename( filename: string ): string {
@@ -447,17 +469,19 @@ export function sanitizeFilename( filename: string ): string {
 		.normalize( 'NFC' )
 		.replace( /[^\p{L}\p{M}\p{N}._ -]/gu, '' )
 		.replace( /\s+/g, ' ' )
-		.trim();
+		.replace( EDGE_DOTS_AND_SPACES, '' );
+	const device = WINDOWS_DEVICE_NAME.test( allowed.split( '.' )[ 0 ].trimEnd() ) ? `_${ allowed }` : allowed;
 	// A leading dot would hide the file once downloaded, so the fallback name goes before it.
-	const cleaned = allowed.startsWith( '.' ) ? `${ FALLBACK_FILENAME }${ allowed }` : allowed;
-	if ( cleaned.length <= MAX_FILENAME_LENGTH ) {
+	const cleaned = device.startsWith( '.' ) ? `${ FALLBACK_FILENAME }${ device }` : device;
+	if ( Buffer.byteLength( cleaned ) <= MAX_FILENAME_BYTES ) {
 		return cleaned || FALLBACK_FILENAME;
 	}
 
 	// An allowed extension says what the file is and must survive the cut;
 	// anything else after a dot is just more name.
 	const suffix = isAllowedExtension( getExtension( cleaned ) ) ? cleaned.slice( cleaned.lastIndexOf( '.' ) ) : '';
-	return cleaned.slice( 0, MAX_FILENAME_LENGTH - suffix.length ) + suffix;
+	const stem = truncateUtf8( cleaned.slice( 0, cleaned.length - suffix.length ), MAX_FILENAME_BYTES - suffix.length );
+	return stem.replace( EDGE_DOTS_AND_SPACES, '' ) + suffix;
 }
 
 function isAllowedExtension( extension: string ): extension is AllowedExtension {

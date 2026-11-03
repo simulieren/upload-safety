@@ -50,7 +50,7 @@ const MESSAGES: Record<UploadRejection, string> = {
 | `validateUploadDescriptor( { filename, mimeType, size }, options )` | Size, extension and MIME checks before reading the body |
 | `inspectFileContent( extension, bytes )` | `'valid' \| 'macros' \| 'encrypted' \| 'mismatch'` |
 | `stripPhotoMetadata( extension, bytes )` | Cleaned bytes, the input for non-photos, `null` for a broken photo |
-| `sanitizeFilename( name )` | Drops path parts and unsafe characters, caps the length at 200 |
+| `sanitizeFilename( name )` | Drops path parts, unsafe characters and trailing dots, renames Windows device names such as `CON`, caps the length at 200 UTF-8 bytes |
 | `getCanonicalMimeType( extension )` | The MIME type to store |
 | `acceptAttribute( extensions? )` | Value for `<input type="file" accept>` |
 | `isEncryptedPdf( buffer )` | PDF encryption check alone |

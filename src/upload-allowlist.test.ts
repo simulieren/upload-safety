@@ -105,6 +105,29 @@ describe( 'sanitizeFilename', () => {
 		expect( sanitizeFilename( `a.${ 'b'.repeat( 250 ) }` ).length ).toBeLessThanOrEqual( 200 );
 	} );
 
+	it( 'counts the limit in UTF-8 bytes and cuts between whole characters', () => {
+		for ( const character of [ '文', '𝐀', 'é', 'e\u0301', 'क्ष' ] ) {
+			const shortened = sanitizeFilename( `${ character.repeat( 150 ) }.docx` );
+			expect( Buffer.byteLength( shortened ), character ).toBeLessThanOrEqual( 200 );
+			expect( shortened.endsWith( '.docx' ) ).toBe( true );
+			expect( shortened.slice( 0, -5 ).replaceAll( character.normalize( 'NFC' ), '' ), character ).toBe( '' );
+		}
+	} );
+
+	it( 'keeps a Windows device name from naming the file', () => {
+		for ( const name of [ 'CON.pdf', 'con.tar.pdf', 'Nul .pdf', 'COM1.pdf', 'lpt9.docx', 'COM¹.pdf', 'AUX' ] ) {
+			expect( sanitizeFilename( name ), name ).toMatch( /^_/ );
+		}
+		for ( const name of [ 'CONTRACT.pdf', 'console.pdf', 'COM10.pdf', 'my CON.pdf' ] ) {
+			expect( sanitizeFilename( name ), name ).toBe( name );
+		}
+	} );
+
+	it( 'drops trailing dots and spaces, which Windows would drop on saving', () => {
+		expect( sanitizeFilename( 'report.pdf. . .' ) ).toBe( 'report.pdf' );
+		expect( sanitizeFilename( `${ 'a'.repeat( 197 ) }. b` ) ).not.toMatch( /[. ]$/ );
+	} );
+
 	it( 'never returns an empty string', () => {
 		expect( sanitizeFilename( '///' ) ).toBe( 'file' );
 	} );
