@@ -20,7 +20,7 @@ interface UploadInput {
 
 interface UploadOptions {
 	maxBytes: number;
-	allowedExtensions?: readonly AllowedExtension[]; // defaults to every supported type
+	allowedExtensions?: readonly AllowedExtension[]; // defaults to ALLOWED_EXTENSIONS, the low-risk formats
 }
 
 type UploadCheck =
@@ -48,10 +48,14 @@ The checks that need no bytes. Use it to refuse an upload before reading the bod
 ## inspectFileContent
 
 ```ts
-function inspectFileContent( extension: AllowedExtension, bytes: Uint8Array ): 'valid' | 'macros' | 'encrypted' | 'mismatch';
+function inspectFileContent(
+	extension: AllowedExtension,
+	bytes: Uint8Array,
+	allowedExtensions?: readonly AllowedExtension[] // for files inside an archive; defaults to ALLOWED_EXTENSIONS
+): 'valid' | 'macros' | 'encrypted' | 'mismatch';
 ```
 
-The content checks alone. `checkUpload` maps `mismatch` to `content-mismatch`.
+The content checks alone. `checkUpload` maps `mismatch` to `content-mismatch`. For images, audio and video it checks the signature; their full structure is read by `stripPhotoMetadata`.
 
 ## stripPhotoMetadata
 
@@ -59,7 +63,7 @@ The content checks alone. `checkUpload` maps `mismatch` to `content-mismatch`.
 function stripPhotoMetadata( extension: AllowedExtension, bytes: Uint8Array ): Uint8Array | null;
 ```
 
-Cleaned bytes for a photo, the input unchanged for any other type, `null` for a photo it cannot read. See [Photos](/formats/photos/).
+Cleaned bytes for an image, audio or video file, the input unchanged for any other type, `null` for a media file it cannot read. See [Photos and images](/formats/photos/) and [Audio and video](/formats/audio-and-video/).
 
 ## sanitizeFilename
 
@@ -97,8 +101,10 @@ Whether a PDF needs a password to open.
 
 | Export | Value |
 | - | - |
-| `AllowedExtension` | `'pdf' \| 'doc' \| 'docx' \| 'ppt' \| 'pptx' \| 'xls' \| 'xlsx' \| 'odt' \| 'ods' \| 'odp' \| 'jpg' \| 'jpeg' \| 'png' \| 'webp' \| 'heic' \| 'heif' \| 'avif' \| 'csv' \| 'txt'` |
-| `ALLOWED_EXTENSIONS` | All of the above, as an array |
+| `AllowedExtension` | Every supported extension: the documents, `jpg` `jpeg` `png` `webp` `heic` `heif` `avif` `gif` `bmp` `ico`, `mp3` `wav` `flac` `ogg` `m4a` `mp4` `mov` `webm`, `csv` `txt` `md` `rtf`, `zip` `tar` `gz` `tgz` `rar` `7z` |
+| `ALLOWED_EXTENSIONS` | The default list: every extension of `low` risk |
+| `FORMAT_RISK` | `Record<AllowedExtension, 'low' \| 'elevated' \| 'unchecked'>`, see [Choosing formats](/formats/risk/) |
+| `FormatRisk` | `'low' \| 'elevated' \| 'unchecked'` |
 | `UploadRejection` | See [Rejection reasons](/reference/rejections/) |
 | `MAX_ZIP_ENTRIES` | 2,000 |
 | `MAX_ZIP_UNCOMPRESSED_BYTES` | 100 MB |

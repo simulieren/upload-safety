@@ -1,29 +1,45 @@
 /**
- * Strict allowlist + validation for document uploads: PDF, MS Office (also the
- * legacy formats), LibreOffice, photos (JPEG, PNG, WebP, HEIC/HEIF, AVIF) and CSV and text. Validation happens on three axes: file
- * extension, declared MIME type, and the actual content, i.e. the magic-byte
- * signature plus the parts a file of that kind always has. Extension and MIME
- * alone are trivially spoofed.
+ * Strict allowlist + validation for uploads: PDF, MS Office (also the legacy formats), LibreOffice,
+ * images, audio, video, text, RTF and archives. Validation happens on three axes: file extension,
+ * declared MIME type, and the actual content, i.e. the magic-byte signature plus the parts a file
+ * of that kind always has. Extension and MIME alone are trivially spoofed.
  */
 
+import { inspectGzip, inspectTarArchive, inspectZipArchive } from './archive-content.js';
 import { inspectExcelGlobals } from './excel-macro-sheets.js';
 import { readFtypBrands } from './heif-metadata.js';
 import { readOleDirectory, type OleDirectory } from './ole-streams.js';
 import { inspectPdf } from './pdf-active-content.js';
+import { M4A_BRANDS, MP4_BRANDS, stripPhotoMetadata } from './photo-metadata.js';
 import { hasPowerPointCode, isEncryptedPowerPoint } from './powerpoint-vba.js';
+import { inspectRtf } from './rtf-content.js';
 import { inspectText } from './text-content.js';
 import { stripXmlMarkup } from './xml-markup.js';
 import { readZipEntries, readZipEntryData, startsWithBytes, type ZipEntry } from './zip-entries.js';
 
 export type AllowedExtension =
 	| 'pdf' | 'doc' | 'docx' | 'ppt' | 'pptx' | 'xls' | 'xlsx' | 'odt' | 'ods' | 'odp'
-	| 'jpg' | 'jpeg' | 'png' | 'webp' | 'heic' | 'heif' | 'avif' | 'csv' | 'txt';
+	| 'jpg' | 'jpeg' | 'png' | 'webp' | 'heic' | 'heif' | 'avif' | 'gif' | 'bmp' | 'ico'
+	| 'mp3' | 'wav' | 'flac' | 'ogg' | 'm4a' | 'mp4' | 'mov' | 'webm'
+	| 'csv' | 'txt' | 'md' | 'rtf' | 'zip' | 'tar' | 'gz' | 'tgz' | 'rar' | '7z';
+
+/**
+ * How much accepting a format exposes. `low`: read in full, nothing in it runs, and it is in the
+ * default list. `elevated`: read in full, but the format is a common malware carrier, gets rendered
+ * or gets unpacked; accepted only when named in `allowedExtensions`. `unchecked`: only the
+ * signature is checked, as its content cannot be read without a decompressor; accepted only when
+ * named, and best served as an opaque download.
+ */
+export type FormatRisk = 'low' | 'elevated' | 'unchecked';
 
 /** Magic-byte family an extension's bytes must match; text has no signature and is checked on its own. */
-type MagicFamily = 'pdf' | 'zip' | 'ole' | 'jpeg' | 'png' | 'webp' | 'isobmff' | 'text';
+type MagicFamily =
+	| 'pdf' | 'zip' | 'ole' | 'jpeg' | 'png' | 'webp' | 'isobmff' | 'text' | 'gif' | 'bmp' | 'ico'
+	| 'mp3' | 'wav' | 'flac' | 'ogg' | 'quicktime' | 'webm' | 'rtf' | 'tar' | 'gzip' | 'rar' | '7z';
 
 interface AllowedType {
 	extension: AllowedExtension;
+	risk: FormatRisk;
 	/** Accepted declared MIME types for this extension. */
 	mimeTypes: string[];
 	/** Byte-signature family the actual content must match. */
@@ -351,69 +367,110 @@ function isEncryptedOpenDocument( content: Buffer, entries: ZipEntry[] ): boolea
 const ODT = 'application/vnd.oasis.opendocument.text';
 const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
 const ODP = 'application/vnd.oasis.opendocument.presentation';
-const JPEG = { magic: 'jpeg', mimeTypes: [ 'image/jpeg', 'image/pjpeg' ] } as const satisfies Omit<AllowedType, 'extension'>;
+const JPEG = { magic: 'jpeg', mimeTypes: [ 'image/jpeg', 'image/pjpeg' ] } as const satisfies Omit<AllowedType, 'extension' | 'risk'>;
 // HEIC is HEIF with HEVC images; `mif1` names HEIF without saying which codec. Sequences (`msf1`, `hevc`, `hevx`, `avis`) are left out.
 const HEVC_BRANDS = [ 'heic', 'heix', 'heim', 'heis' ];
+const ARCHIVE_EXTENSIONS: ReadonlySet<AllowedExtension> = new Set( [ 'zip', 'tar', 'gz', 'tgz', 'rar', '7z' ] );
 
 // OOXML (docx/xlsx/pptx) and OpenDocument (odt/ods/odp) files are ZIP
 // containers; legacy Office formats (doc/xls/ppt) are OLE compound files.
 const ALLOWED_TYPES: readonly AllowedType[] = [
-	{ extension: 'pdf', magic: 'pdf', mimeTypes: [ 'application/pdf' ] },
+	{ extension: 'pdf', risk: 'low', magic: 'pdf', mimeTypes: [ 'application/pdf' ] },
 	{
-		extension: 'doc', magic: 'ole', mimeTypes: [ 'application/msword' ], oleStreams: [ 'WordDocument' ],
+		extension: 'doc',
+		risk: 'low', magic: 'ole', mimeTypes: [ 'application/msword' ], oleStreams: [ 'WordDocument' ],
 	},
 	{
 		extension: 'docx',
+		risk: 'low',
 		magic: 'zip',
 		mimeTypes: [ 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ],
 		zipEntries: ooxml( 'word/document.xml' ),
 	},
 	{
-		extension: 'ppt', magic: 'ole', mimeTypes: [ 'application/vnd.ms-powerpoint' ], oleStreams: [ 'PowerPoint Document' ],
+		extension: 'ppt',
+		risk: 'low', magic: 'ole', mimeTypes: [ 'application/vnd.ms-powerpoint' ], oleStreams: [ 'PowerPoint Document' ],
 	},
 	{
 		extension: 'pptx',
+		risk: 'low',
 		magic: 'zip',
 		mimeTypes: [ 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ],
 		zipEntries: ooxml( 'ppt/presentation.xml' ),
 	},
 	{
-		extension: 'xls', magic: 'ole', mimeTypes: [ 'application/vnd.ms-excel' ], oleStreams: [ 'Workbook', 'Book' ],
+		extension: 'xls',
+		risk: 'low', magic: 'ole', mimeTypes: [ 'application/vnd.ms-excel' ], oleStreams: [ 'Workbook', 'Book' ],
 	},
 	{
 		extension: 'xlsx',
+		risk: 'low',
 		magic: 'zip',
 		mimeTypes: [ 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ],
 		zipEntries: ooxml( 'xl/workbook.xml' ),
 	},
 	{
-		extension: 'odt', magic: 'zip', mimeTypes: [ ODT ], zipEntries: OPEN_DOCUMENT_ENTRIES, openDocumentType: ODT,
+		extension: 'odt',
+		risk: 'low', magic: 'zip', mimeTypes: [ ODT ], zipEntries: OPEN_DOCUMENT_ENTRIES, openDocumentType: ODT,
 	},
 	{
-		extension: 'ods', magic: 'zip', mimeTypes: [ ODS ], zipEntries: OPEN_DOCUMENT_ENTRIES, openDocumentType: ODS,
+		extension: 'ods',
+		risk: 'low', magic: 'zip', mimeTypes: [ ODS ], zipEntries: OPEN_DOCUMENT_ENTRIES, openDocumentType: ODS,
 	},
 	{
-		extension: 'odp', magic: 'zip', mimeTypes: [ ODP ], zipEntries: OPEN_DOCUMENT_ENTRIES, openDocumentType: ODP,
+		extension: 'odp',
+		risk: 'low', magic: 'zip', mimeTypes: [ ODP ], zipEntries: OPEN_DOCUMENT_ENTRIES, openDocumentType: ODP,
 	},
-	{ extension: 'jpg', ...JPEG },
-	{ extension: 'jpeg', ...JPEG },
-	{ extension: 'png', magic: 'png', mimeTypes: [ 'image/png' ] },
-	{ extension: 'webp', magic: 'webp', mimeTypes: [ 'image/webp' ] },
-	{ extension: 'heic', magic: 'isobmff', mimeTypes: [ 'image/heic' ], brands: HEVC_BRANDS },
-	{ extension: 'heif', magic: 'isobmff', mimeTypes: [ 'image/heif', 'image/heic' ], brands: [ ...HEVC_BRANDS, 'mif1' ] },
-	{ extension: 'avif', magic: 'isobmff', mimeTypes: [ 'image/avif' ], brands: [ 'avif' ] },
+	{ extension: 'jpg', risk: 'low', ...JPEG },
+	{ extension: 'jpeg', risk: 'low', ...JPEG },
+	{ extension: 'png', risk: 'low', magic: 'png', mimeTypes: [ 'image/png' ] },
+	{ extension: 'webp', risk: 'low', magic: 'webp', mimeTypes: [ 'image/webp' ] },
+	{ extension: 'heic', risk: 'low', magic: 'isobmff', mimeTypes: [ 'image/heic' ], brands: HEVC_BRANDS },
+	{ extension: 'heif', risk: 'low', magic: 'isobmff', mimeTypes: [ 'image/heif', 'image/heic' ], brands: [ ...HEVC_BRANDS, 'mif1' ] },
+	{ extension: 'avif', risk: 'low', magic: 'isobmff', mimeTypes: [ 'image/avif' ], brands: [ 'avif' ] },
 	// Windows names the type of a CSV file after Excel.
 	{
-		extension: 'csv', magic: 'text', mimeTypes: [ 'text/csv', 'application/vnd.ms-excel', 'application/csv', 'text/x-csv', 'text/comma-separated-values', 'text/plain' ],
+		extension: 'csv',
+		risk: 'low', magic: 'text', mimeTypes: [ 'text/csv', 'application/vnd.ms-excel', 'application/csv', 'text/x-csv', 'text/comma-separated-values', 'text/plain' ],
 	},
-	{ extension: 'txt', magic: 'text', mimeTypes: [ 'text/plain' ] },
+	{ extension: 'txt', risk: 'low', magic: 'text', mimeTypes: [ 'text/plain' ] },
+	{ extension: 'gif', risk: 'low', magic: 'gif', mimeTypes: [ 'image/gif' ] },
+	{ extension: 'bmp', risk: 'low', magic: 'bmp', mimeTypes: [ 'image/bmp', 'image/x-bmp', 'image/x-ms-bmp' ] },
+	{ extension: 'ico', risk: 'low', magic: 'ico', mimeTypes: [ 'image/vnd.microsoft.icon', 'image/x-icon', 'image/ico' ] },
+	{ extension: 'mp3', risk: 'low', magic: 'mp3', mimeTypes: [ 'audio/mpeg', 'audio/mp3', 'audio/mpeg3' ] },
+	{ extension: 'wav', risk: 'low', magic: 'wav', mimeTypes: [ 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/vnd.wave' ] },
+	{ extension: 'flac', risk: 'low', magic: 'flac', mimeTypes: [ 'audio/flac', 'audio/x-flac' ] },
+	{ extension: 'ogg', risk: 'low', magic: 'ogg', mimeTypes: [ 'audio/ogg', 'application/ogg', 'video/ogg' ] },
+	{ extension: 'm4a', risk: 'low', magic: 'isobmff', mimeTypes: [ 'audio/mp4', 'audio/x-m4a', 'audio/m4a' ], brands: M4A_BRANDS },
+	{ extension: 'mp4', risk: 'low', magic: 'isobmff', mimeTypes: [ 'video/mp4', 'application/mp4' ], brands: MP4_BRANDS },
+	// Old QuickTime movies have no `ftyp`; the structure is checked when the metadata is removed.
+	{ extension: 'mov', risk: 'low', magic: 'quicktime', mimeTypes: [ 'video/quicktime' ] },
+	{ extension: 'webm', risk: 'low', magic: 'webm', mimeTypes: [ 'video/webm', 'audio/webm' ] },
+	// Rendered Markdown may carry raw HTML and `javascript:` links; the file itself is checked as text.
+	{ extension: 'md', risk: 'elevated', magic: 'text', mimeTypes: [ 'text/markdown', 'text/x-markdown', 'text/plain' ] },
+	// A common carrier of OLE exploits; refused on any object, template or DDE field.
+	{ extension: 'rtf', risk: 'elevated', magic: 'rtf', mimeTypes: [ 'application/rtf', 'text/rtf' ] },
+	// Archives pass when every file in them would pass on its own; they are not rewritten.
+	{ extension: 'zip', risk: 'elevated', magic: 'zip', mimeTypes: [ 'application/zip', 'application/x-zip-compressed' ] },
+	{ extension: 'tar', risk: 'elevated', magic: 'tar', mimeTypes: [ 'application/x-tar' ] },
+	{ extension: 'gz', risk: 'elevated', magic: 'gzip', mimeTypes: [ 'application/gzip', 'application/x-gzip' ] },
+	{ extension: 'tgz', risk: 'elevated', magic: 'gzip', mimeTypes: [ 'application/gzip', 'application/x-gzip', 'application/x-compressed-tar', 'application/x-gtar' ] },
+	// Reading these needs an LZMA or RAR decompressor, so only their signature is checked.
+	{ extension: 'rar', risk: 'unchecked', magic: 'rar', mimeTypes: [ 'application/vnd.rar', 'application/x-rar-compressed', 'application/x-rar' ] },
+	{ extension: '7z', risk: 'unchecked', magic: '7z', mimeTypes: [ 'application/x-7z-compressed' ] },
 ];
 
 const TYPE_BY_EXTENSION = new Map<AllowedExtension, AllowedType>(
 	ALLOWED_TYPES.map( ( type ) => [ type.extension, type ] )
 );
 
-export const ALLOWED_EXTENSIONS: readonly AllowedExtension[] = ALLOWED_TYPES.map( ( type ) => type.extension );
+/** The default list: every format of `low` risk. The others must be named in `allowedExtensions`. */
+export const ALLOWED_EXTENSIONS: readonly AllowedExtension[] = ALLOWED_TYPES.filter( ( type ) => type.risk === 'low' ).map( ( type ) => type.extension );
+
+/** The risk of accepting each format; see {@link FormatRisk}. */
+export const FORMAT_RISK: Readonly<Record<AllowedExtension, FormatRisk>> = Object.fromEntries(
+	ALLOWED_TYPES.map( ( type ) => [ type.extension, type.risk ] )
+) as Record<AllowedExtension, FormatRisk>;
 
 /** The `accept` attribute value for a file input that takes `extensions`. */
 export function acceptAttribute( extensions: readonly AllowedExtension[] = ALLOWED_EXTENSIONS ): string {
@@ -431,7 +488,7 @@ export interface UploadDescriptor {
 
 export interface UploadOptions {
 	maxBytes: number;
-	/** Narrows the built-in allowlist; defaults to every type in it. */
+	/** The formats to accept; defaults to {@link ALLOWED_EXTENSIONS}, the formats of `low` risk. */
 	allowedExtensions?: readonly AllowedExtension[];
 }
 
@@ -563,6 +620,35 @@ const MAGIC_SIGNATURES: Record<MagicFamily, ( bytes: Uint8Array ) => boolean> = 
 	jpeg: ( bytes ) => startsWith( bytes, [ 0xff, 0xd8, 0xff ] ),
 	// "\x89PNG\r\n\x1A\n"
 	png: ( bytes ) => startsWith( bytes, [ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a ] ),
+	// "GIF8", then "7a" or "9a"
+	gif: ( bytes ) => startsWith( bytes, [ 0x47, 0x49, 0x46, 0x38 ] ),
+	// "BM"
+	bmp: ( bytes ) => startsWith( bytes, [ 0x42, 0x4d ] ),
+	// Reserved 0, type 1 (icon)
+	ico: ( bytes ) => startsWith( bytes, [ 0x00, 0x00, 0x01, 0x00 ] ),
+	// An ID3 tag or an MPEG audio frame sync
+	mp3: ( bytes ) => startsWith( bytes, [ 0x49, 0x44, 0x33 ] ) || ( bytes.length >= 2 && bytes[ 0 ] === 0xff && ( bytes[ 1 ] & 0xe0 ) === 0xe0 ),
+	// "RIFF", the size, "WAVE"
+	wav: ( bytes ) => startsWith( bytes, [ 0x52, 0x49, 0x46, 0x46 ] ) && bytes.length >= 12 &&
+		startsWith( bytes.subarray( 8 ), [ 0x57, 0x41, 0x56, 0x45 ] ),
+	// "fLaC"
+	flac: ( bytes ) => startsWith( bytes, [ 0x66, 0x4c, 0x61, 0x43 ] ),
+	// "OggS"
+	ogg: ( bytes ) => startsWith( bytes, [ 0x4f, 0x67, 0x67, 0x53 ] ),
+	// Checked box by box when the metadata is removed, as an old movie may start with any of several boxes.
+	quicktime: ( bytes ) => bytes.length >= 8,
+	// EBML header
+	webm: ( bytes ) => startsWith( bytes, [ 0x1a, 0x45, 0xdf, 0xa3 ] ),
+	// Checked by the RTF reader, which also takes Word's shorter `{\rt`.
+	rtf: () => true,
+	// "ustar" at 257, checked by the tar reader.
+	tar: () => true,
+	gzip: ( bytes ) => startsWith( bytes, [ 0x1f, 0x8b ] ),
+	// "Rar!\x1A\x07", then 0x00 (RAR 4) or 0x01 0x00 (RAR 5)
+	rar: ( bytes ) => startsWith( bytes, [ 0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00 ] ) ||
+		startsWith( bytes, [ 0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00 ] ),
+	// "7z\xBC\xAF\x27\x1C"
+	'7z': ( bytes ) => startsWith( bytes, [ 0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c ] ),
 	// "RIFF", the size, "WEBP"
 	webp: ( bytes ) => startsWith( bytes, [ 0x52, 0x49, 0x46, 0x46 ] ) && bytes.length >= 12 &&
 		startsWith( bytes.subarray( 8 ), [ 0x57, 0x45, 0x42, 0x50 ] ),
@@ -575,10 +661,30 @@ const MAGIC_SIGNATURES: Record<MagicFamily, ( bytes: Uint8Array ) => boolean> = 
 export type FileContentVerdict = 'valid' | 'macros' | 'encrypted' | 'mismatch';
 
 /**
+ * A check for a file inside an archive: it must be of a format in `allowedExtensions`, not an
+ * archive itself, and pass what it would pass uploaded alone, its structure included.
+ */
+function archiveEntryCheck( allowedExtensions: readonly AllowedExtension[] ) {
+	return ( name: string, bytes: Buffer ): FileContentVerdict => {
+		const extension = getExtension( name );
+		if ( ! isAllowedExtension( extension ) || ! allowedExtensions.includes( extension ) || ARCHIVE_EXTENSIONS.has( extension ) ) {
+			return 'mismatch';
+		}
+		const verdict = inspectFileContent( extension, bytes, allowedExtensions );
+		return verdict === 'valid' && ! stripPhotoMetadata( extension, bytes ) ? 'mismatch' : verdict;
+	};
+}
+
+/**
  * Checks once that a file's bytes are what `extension` claims: the signature
  * of its family and every part a file of that kind contains, but no macros.
+ * Files inside an archive must be of a format in `allowedExtensions`.
  */
-export function inspectFileContent( extension: AllowedExtension, bytes: Uint8Array ): FileContentVerdict {
+export function inspectFileContent(
+	extension: AllowedExtension,
+	bytes: Uint8Array,
+	allowedExtensions: readonly AllowedExtension[] = ALLOWED_EXTENSIONS
+): FileContentVerdict {
 	const allowed = TYPE_BY_EXTENSION.get( extension );
 	if ( allowed?.zipEntries && ! allowed.openDocumentType && MAGIC_SIGNATURES.ole( bytes ) ) {
 		return holdsEncryptedPackage( readOleDirectory( toBuffer( bytes ) ) ) ? 'encrypted' : 'mismatch';
@@ -596,6 +702,18 @@ export function inspectFileContent( extension: AllowedExtension, bytes: Uint8Arr
 	}
 	if ( allowed.magic === 'text' ) {
 		return inspectText( content, allowed.extension === 'csv' );
+	}
+	if ( allowed.magic === 'rtf' ) {
+		return inspectRtf( content );
+	}
+	if ( allowed.extension === 'zip' ) {
+		return inspectZipArchive( content, archiveEntryCheck( allowedExtensions ) );
+	}
+	if ( allowed.magic === 'tar' ) {
+		return inspectTarArchive( content, archiveEntryCheck( allowedExtensions ) );
+	}
+	if ( allowed.magic === 'gzip' ) {
+		return inspectGzip( content, archiveEntryCheck( allowedExtensions ), allowed.extension === 'tgz' );
 	}
 	if ( allowed.brands ) {
 		const brands = readFtypBrands( content );

@@ -31,7 +31,7 @@ Use the canonical `result.mimeType`, not the one the client declared. Serving up
 
 ## Metadata in documents
 
-Only photos are stripped. Author names in Office and PDF files, and EXIF in images inside documents, are kept.
+Only images, audio and video are stripped. Author names in Office and PDF files, and EXIF in images inside documents, are kept.
 
 ## Virus scanning
 

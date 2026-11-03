@@ -37,7 +37,7 @@ export default defineConfig( {
 				},
 				{
 					label: 'Formats',
-					items: [ 'formats/pdf', 'formats/office', 'formats/opendocument', 'formats/photos', 'formats/csv-and-text' ],
+					items: [ 'formats/risk', 'formats/pdf', 'formats/office', 'formats/opendocument', 'formats/photos', 'formats/audio-and-video', 'formats/csv-and-text', 'formats/rtf', 'formats/archives' ],
 				},
 				{
 					label: 'Reference',

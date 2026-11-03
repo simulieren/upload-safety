@@ -9,6 +9,8 @@
 import { crc32 } from 'node:zlib';
 
 import { stripHeif } from './heif-metadata.js';
+import { checkBmp, checkIco, checkOgg, stripFlac, stripGif, stripMp3, stripWav } from './media-formats.js';
+import { stripIsoMedia, stripWebm } from './video-formats.js';
 
 import type { AllowedExtension } from './upload-allowlist.js';
 
@@ -301,9 +303,13 @@ function stripWebp( bytes: Buffer ): Buffer | null {
 	return Buffer.concat( [ header, ...chunks ] );
 }
 
+export const MP4_BRANDS = [ 'isom', 'iso2', 'iso4', 'iso5', 'iso6', 'mp41', 'mp42', 'avc1', 'dash', 'M4V ', 'msdh', 'msix' ];
+// A video renamed to .m4a passes as well; both are media and neither runs.
+export const M4A_BRANDS = [ 'M4A ', 'M4B ', 'mp42', 'isom', 'iso2' ];
+
 /**
- * The bytes to store for an upload: a photo without its metadata, any other file
- * unchanged; null for a photo whose structure does not read.
+ * The bytes to store for an upload: an image, audio or video file without its metadata, any
+ * other file unchanged; null for a media file whose structure does not read.
  */
 export function stripPhotoMetadata( extension: AllowedExtension, bytes: Uint8Array ): Uint8Array | null {
 	const content = Buffer.from( bytes.buffer, bytes.byteOffset, bytes.byteLength );
@@ -319,6 +325,28 @@ export function stripPhotoMetadata( extension: AllowedExtension, bytes: Uint8Arr
 		case 'heif':
 		case 'avif':
 			return stripHeif( content );
+		case 'gif':
+			return stripGif( content );
+		case 'bmp':
+			return checkBmp( content );
+		case 'ico':
+			return checkIco( content );
+		case 'mp3':
+			return stripMp3( content );
+		case 'wav':
+			return stripWav( content );
+		case 'flac':
+			return stripFlac( content );
+		case 'ogg':
+			return checkOgg( content );
+		case 'mp4':
+			return stripIsoMedia( content, MP4_BRANDS );
+		case 'm4a':
+			return stripIsoMedia( content, M4A_BRANDS );
+		case 'mov':
+			return stripIsoMedia( content, null );
+		case 'webm':
+			return stripWebm( content );
 		default:
 			return bytes;
 	}

@@ -20,6 +20,9 @@ description: Concrete uploads and what upload-safety does with each.
 | `data.xlsx` that is a zip bomb | refused, `content-mismatch` |
 | `holiday.jpg` with GPS coordinates | accepted, EXIF, XMP, IPTC and comments removed, orientation kept |
 | `IMG_0042.heic` from an iPhone | accepted, EXIF and XMP overwritten in place, pixels unchanged |
+| `clip.mov` from an iPhone with its location | accepted, location, title and other metadata boxes blanked in place |
+| `letter.rtf` with an embedded OLE object or a DDE field | refused, `macros` (RTF is opt-in) |
+| `files.zip` holding a `.docx` with macros or an `.exe` | refused, `macros` or `content-mismatch` (archives are opt-in) |
 | `../../CON.pdf`, a plain PDF | accepted, stored as `_CON.pdf` |
 
 Every check fails closed: a part it cannot read is a refusal, not a pass.

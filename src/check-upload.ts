@@ -36,7 +36,7 @@ export function checkUpload( { filename, mimeType, bytes }: UploadInput, options
 		return descriptor;
 	}
 	const { extension, sanitizedFilename } = descriptor;
-	const verdict = inspectFileContent( extension, bytes );
+	const verdict = inspectFileContent( extension, bytes, options.allowedExtensions );
 	if ( verdict === 'macros' || verdict === 'encrypted' ) {
 		return { ok: false, reason: verdict };
 	}

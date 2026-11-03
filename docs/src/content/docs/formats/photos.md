@@ -1,7 +1,7 @@
 ---
 title: Strip GPS and EXIF from photo uploads in Node
 sidebar:
-  label: Photos
+  label: Photos and images
 description: How JPEG, PNG, WebP, HEIC, HEIF and AVIF uploads are checked and cleaned.
 ---
 
@@ -13,6 +13,9 @@ description: How JPEG, PNG, WebP, HEIC, HEIF and AVIF uploads are checked and cl
 | `heic` | `image/heic` |
 | `heif` | `image/heif`, `image/heic` |
 | `avif` | `image/avif` |
+| `gif` | `image/gif` |
+| `bmp` | `image/bmp` |
+| `ico` | `image/vnd.microsoft.icon` |
 
 Photos are not refused for their metadata. They are cleaned, and `result.bytes` holds the cleaned copy. A photo whose structure cannot be read is refused as `content-mismatch`.
 
@@ -27,6 +30,12 @@ These are ISOBMFF files, the format iPhones save by default. The `ftyp` brands m
 EXIF and XMP items are overwritten in place with zeros instead of removed, since dropping them would shift the byte offsets the file is built on. The orientation lives in the image properties, not in EXIF, and stays.
 
 Image sequences, such as animated AVIF or HEIF bursts, are refused as `content-mismatch`.
+
+## GIF, BMP and ICO
+
+GIF comments, XMP and other application extensions are removed. The animation loop and colour profile stay, and anything after the end of the image is cut off, so a GIF cannot carry a JAR or ZIP behind it.
+
+BMP and ICO hold no metadata worth removing. Their headers are checked. ICO entries must be PNG or BMP images; cursor files (`.cur`) are refused.
 
 ## Not checked
 

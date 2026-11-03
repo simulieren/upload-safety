@@ -5,7 +5,7 @@
  * `irot` and `imir` properties, which stay. Image sequences (`moov`) are refused.
  */
 
-interface Box {
+export interface Box {
 	type: string;
 	/** Where the box's content starts, past its header. */
 	start: number;
@@ -22,7 +22,7 @@ const EMPTY_EXIF = Buffer.from( '00000000' + '4d4d002a00000008' + '0000' + '0000
 const SPACE = 0x20;
 
 /** The boxes in `[start, end)`, or null when one runs past it or there are too many. */
-function readBoxes( bytes: Buffer, start: number, end: number ): Box[] | null {
+export function readBoxes( bytes: Buffer, start: number, end: number ): Box[] | null {
 	const boxes: Box[] = [];
 	for ( let offset = start; offset < end; ) {
 		if ( offset + 8 > end || boxes.length === MAX_BOXES ) {

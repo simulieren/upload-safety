@@ -35,7 +35,7 @@ describe( 'validateUploadDescriptor', () => {
 	} );
 
 	it( 'rejects disallowed extensions', () => {
-		for ( const filename of [ 'malware.exe', 'archive.zip', 'grafik.svg', 'animation.gif', 'noext' ] ) {
+		for ( const filename of [ 'malware.exe', 'archive.zip', 'grafik.svg', 'backup.rar', 'notes.rtf', 'readme.md', 'noext' ] ) {
 			expect( validateUploadDescriptor( { filename, mimeType: '', size: 1000 }, { maxBytes: MAX } ).ok ).toBe( false );
 		}
 	} );

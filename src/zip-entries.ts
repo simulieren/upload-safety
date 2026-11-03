@@ -16,6 +16,8 @@ export interface ZipEntry {
 	localHeaderOffset: number;
 	/** Where the entry's (compressed) data starts, past its local header. */
 	dataOffset: number;
+	/** Whether a Unix-made archive marks the entry as a symbolic link. */
+	symlink: boolean;
 }
 
 /** Upper bounds that keep a crafted archive from passing as a document. */
@@ -37,6 +39,9 @@ const DATA_DESCRIPTOR_FLAG = 0x0008;
 const DATA_DESCRIPTOR_SIGNATURE = 0x08074b50;
 const DATA_DESCRIPTOR_SIZE = 12;
 const UTF8_NAME_FLAG = 0x0800;
+const UNIX_HOST = 3;
+const UNIX_FILE_TYPE_MASK = 0o170000;
+const UNIX_SYMLINK = 0o120000;
 const STORED = 0;
 const DEFLATED = 8;
 /**
@@ -58,7 +63,7 @@ function findEndOfCentralDirectory( content: Buffer ): number {
 }
 
 /** The central directory's view of an entry, which its local header must repeat. */
-interface CentralHeader extends Omit<ZipEntry, 'dataOffset'> {
+interface CentralHeader extends Omit<ZipEntry, 'dataOffset' | 'symlink'> {
 	flags: number;
 	crc: number;
 }
@@ -103,7 +108,7 @@ function findEntrySpan( content: Buffer, entry: CentralHeader, nameBytes: Buffer
 // Windows unpackers also take `\` for a separator and `C:` for a drive.
 const ROOTED_NAME = /^(?:[/\\]|[a-z]:)/i;
 
-function isSafeName( name: string ): boolean {
+export function isSafeName( name: string ): boolean {
 	return name.length > 0 && ! ROOTED_NAME.test( name ) && ! name.includes( '\0' ) && ! name.split( /[/\\]/ ).includes( '..' );
 }
 
@@ -149,6 +154,8 @@ export function readZipEntries( content: Buffer ): ZipEntry[] | null {
 		const nameLength = content.readUInt16LE( position + 28 );
 		const next = position + CENTRAL_HEADER_SIZE + nameLength + content.readUInt16LE( position + 30 ) + content.readUInt16LE( position + 32 );
 		const localHeaderOffset = content.readUInt32LE( position + 42 );
+		const symlink = content[ position + 5 ] === UNIX_HOST &&
+			( content.readUInt32LE( position + 38 ) >>> 16 & UNIX_FILE_TYPE_MASK ) === UNIX_SYMLINK;
 		if ( next > directoryEnd || localHeaderOffset >= directoryOffset ||
 			flags & ENCRYPTED_FLAG || ( method !== STORED && method !== DEFLATED ) ||
 			compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localHeaderOffset === 0xffffffff ) {
@@ -176,7 +183,7 @@ export function readZipEntries( content: Buffer ): ZipEntry[] | null {
 
 		names.add( name.toLowerCase() );
 		entries.push( {
-			name, method, compressedSize, uncompressedSize, localHeaderOffset, dataOffset: span.dataStart,
+			name, method, compressedSize, uncompressedSize, localHeaderOffset, dataOffset: span.dataStart, symlink,
 		} );
 		spans.push( { start: localHeaderOffset, end: span.end } );
 		position = next;
@@ -195,6 +202,29 @@ export function readZipEntries( content: Buffer ): ZipEntry[] | null {
 		covered = span.end;
 	}
 	return covered === directoryOffset ? entries : null;
+}
+
+/**
+ * Whether the central directory marks any entry as encrypted, for telling a password-protected
+ * archive apart from a malformed one after {@link readZipEntries} returned null.
+ */
+export function hasEncryptedZipEntry( content: Buffer ): boolean {
+	const eocd = findEndOfCentralDirectory( content );
+	if ( eocd < 0 ) {
+		return false;
+	}
+	const directoryEnd = Math.min( eocd, content.readUInt32LE( eocd + 16 ) + content.readUInt32LE( eocd + 12 ) );
+	let position = content.readUInt32LE( eocd + 16 );
+	for ( let index = 0; index < content.readUInt16LE( eocd + 10 ); index++ ) {
+		if ( position + CENTRAL_HEADER_SIZE > directoryEnd || content.readUInt32LE( position ) !== CENTRAL_HEADER_SIGNATURE ) {
+			return false;
+		}
+		if ( content.readUInt16LE( position + 8 ) & ENCRYPTED_FLAG ) {
+			return true;
+		}
+		position += CENTRAL_HEADER_SIZE + content.readUInt16LE( position + 28 ) + content.readUInt16LE( position + 30 ) + content.readUInt16LE( position + 32 );
+	}
+	return false;
 }
 
 /**

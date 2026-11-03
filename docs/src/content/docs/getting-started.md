@@ -35,9 +35,9 @@ if ( result.ok ) {
 
 Store `result.bytes`, not the original bytes, and serve them with `result.mimeType`, not the type the client declared.
 
-## Narrow the accepted types
+## Choose the accepted types
 
-By default every [supported format](/formats/pdf/) is accepted. Pass `allowedExtensions` to take fewer:
+By default every format of `low` risk is accepted: documents, images, audio, video, CSV and text. RTF, Markdown and archives are opt-in, see [Choosing formats](/formats/risk/). Pass `allowedExtensions` to take fewer or more:
 
 ```ts
 checkUpload( file, { maxBytes: 5 * 1024 * 1024, allowedExtensions: [ 'pdf', 'docx', 'jpg', 'jpeg', 'png' ] } );

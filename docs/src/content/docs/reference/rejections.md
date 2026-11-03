@@ -7,9 +7,9 @@ description: The seven values of UploadRejection and what triggers each.
 | - | - |
 | `empty` | The file has no bytes. |
 | `too-large` | The file is larger than `maxBytes`. |
-| `type-not-allowed` | The extension is not supported, or not in `allowedExtensions`. |
+| `type-not-allowed` | The extension is not supported, or not in `allowedExtensions` (which by default holds only `low`-risk formats). |
 | `mime-mismatch` | The declared MIME type does not belong to the extension. An empty type, `application/octet-stream` and `application/zip` are accepted for every extension. |
-| `content-mismatch` | The bytes are not what the extension says, or cannot be read: a wrong signature, a zip bomb, a malformed ZIP or OLE file, a broken photo, an image sequence, binary data in a text file. |
+| `content-mismatch` | The bytes are not what the extension says, or cannot be read: a wrong signature, a zip bomb, a malformed ZIP or OLE file, a broken media file, an image sequence, binary data in a text file, or a file inside an archive that is of a format not in your list, another archive, a link or at an unsafe path. |
 | `macros` | The file carries active content. See below. |
 | `encrypted` | The file is password-protected, so its content cannot be checked. |
 
@@ -27,5 +27,7 @@ The name is short for all active content:
 - Basic and script modules, event listeners and macro links in OpenDocument files
 - JavaScript, launch, submit and import actions, links to other files, multimedia, XFA forms and attachments in PDFs
 - Formulas that call a function or DDE in CSV files
+- Objects, templates and DDE fields in RTF files
+- Any of the above in a file inside an archive
 
 The per-format pages list the details: [PDF](/formats/pdf/), [Office](/formats/office/), [OpenDocument](/formats/opendocument/), [CSV](/formats/csv-and-text/).

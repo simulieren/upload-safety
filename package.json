@@ -1,7 +1,7 @@
 {
 	"name": "upload-safety",
-	"version": "0.2.1",
-	"description": "Server-side upload checks for Node: extension/MIME allowlist, magic bytes, refusal of macros, embedded objects, DDE, PDF scripts, CSV formulas and encrypted files, metadata stripping for JPEG, PNG, WebP, HEIC and AVIF.",
+	"version": "0.3.0",
+	"description": "Server-side upload checks for Node: extension/MIME allowlist, magic bytes, refusal of macros, embedded objects, DDE, PDF scripts, CSV formulas and encrypted files, metadata stripping for photos, audio and video, and opt-in RTF and archive checks.",
 	"keywords": [
 		"upload",
 		"file-upload",
@@ -18,7 +18,10 @@
 		"heic",
 		"webp",
 		"avif",
-		"csv-injection"
+		"csv-injection",
+		"rtf",
+		"zip",
+		"mp4"
 	],
 	"license": "MIT",
 	"author": "Simon Halimonov (https://www.simonhalimonov.com)",

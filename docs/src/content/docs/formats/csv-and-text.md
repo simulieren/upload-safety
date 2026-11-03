@@ -9,6 +9,7 @@ description: How CSV and TXT uploads are checked for binary data and formula inj
 | - | - |
 | `csv` | `text/csv`, also `application/vnd.ms-excel` (what Windows sends), `application/csv`, `text/x-csv`, `text/comma-separated-values`, `text/plain` |
 | `txt` | `text/plain` |
+| `md` | `text/markdown`, `text/plain` |
 
 ## Binary data
 
@@ -32,6 +33,8 @@ A CSV cell is refused as `macros` when it starts like a formula (`=`, `+`, `-` o
 
 Quoted cells across lines are read as one cell, and `,`, `;` and tab all count as separators.
 
-## TXT
+## TXT and Markdown
 
-Plain text files are checked for binary data only. A `.txt` is not opened as a spreadsheet, so formulas are not looked for.
+Plain text and Markdown files are checked for binary data only. They are not opened as spreadsheets, so formulas are not looked for.
+
+Markdown is opt-in (risk `elevated`): rendered, it becomes HTML, and raw HTML or `javascript:` links in it become part of your page. Sanitize what you render, or offer the file only as a download.

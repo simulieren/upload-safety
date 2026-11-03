@@ -14,6 +14,10 @@ These checks refuse active content and anything they cannot read. They do not ju
 - DDE is not found in an `.xlsx` cell formula that names a DDE source without an external link part.
 - Image dimensions are not checked. See [Serving uploads safely](/guides/serving-uploads/).
 - Metadata in Office and PDF files, such as author names, is kept.
+- GPS recorded per frame in a video's metadata track (GoPro, DJI) and Ogg comments are kept.
+- Files inside archives are checked but not rewritten, so they keep their metadata.
+- RAR and 7z are checked by signature only. See [Choosing formats](/formats/risk/).
+- RTF is checked against a list of what Word runs; a spelling Word accepts and the check does not know would pass.
 
 ## Size caps
 
