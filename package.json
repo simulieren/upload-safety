@@ -1,8 +1,31 @@
 {
 	"name": "upload-safety",
 	"version": "0.1.0",
-	"private": true,
-	"description": "Server-side upload checks for Node: extension/MIME allowlist, magic bytes, Office/ODF macro and encryption detection, PDF encryption, photo metadata stripping.",
+	"description": "Server-side upload checks for Node: extension/MIME allowlist, magic bytes, refusal of macros, embedded objects, DDE, PDF scripts and encrypted files, photo metadata stripping.",
+	"keywords": [
+		"upload",
+		"file-upload",
+		"security",
+		"validation",
+		"magic-bytes",
+		"macro",
+		"vba",
+		"ole",
+		"ooxml",
+		"pdf",
+		"exif",
+		"metadata"
+	],
+	"license": "MIT",
+	"author": "Simon Halimonov (https://www.simonhalimonov.com)",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/simulieren/upload-safety.git"
+	},
+	"homepage": "https://github.com/simulieren/upload-safety#readme",
+	"bugs": {
+		"url": "https://github.com/simulieren/upload-safety/issues"
+	},
 	"type": "module",
 	"exports": {
 		".": {
@@ -25,7 +48,8 @@
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
 		"prepare": "npm run build",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "npm run typecheck && npm test"
 	},
 	"devDependencies": {
 		"@types/node": "22.15.29",

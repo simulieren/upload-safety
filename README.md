@@ -11,6 +11,12 @@ It accepts PDF, Word, Excel and PowerPoint (OOXML and the legacy binary formats)
 - ZIP and OLE reading is capped against zip bombs and malformed sector chains.
 - JPEG and PNG: EXIF (GPS included), XMP, IPTC and comments are removed. The orientation is kept.
 
+## Install
+
+```sh
+npm install upload-safety
+```
+
 ## Usage
 
 ```ts
@@ -55,11 +61,27 @@ These checks are not an antivirus scan. They reject active content and anything 
 
 The ZIP limits (`MAX_ZIP_UNCOMPRESSED_BYTES`, `MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES`) are set to 100 MB. If a virus scanner runs after these checks, keep them at or below its own limits: ClamAV, for one, reports content past `MaxScanSize` and `MaxFileSize` as clean.
 
+## Before and after the checks
+
+The library checks bytes it is handed. The rest of the upload path is up to you:
+
+- **Limit the request body before reading it.** `maxBytes` is checked after the whole file is in memory, so cap the body in your server or proxy first.
+- **Serve stored files as downloads.** Send `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`, and use the canonical `result.mimeType`, not the one the client declared. Serving uploads from a separate origin keeps a file that slips through away from your cookies.
+- **Limit image dimensions before resizing.** A small JPEG or PNG can declare a huge size. These checks do not decode images, so cap width and height in whatever makes thumbnails (sharp's `limitInputPixels`, ImageMagick's `policy.xml`).
+- **Expect metadata in documents.** Only JPEG and PNG uploads are stripped. Author names in Office and PDF files, and EXIF in images inside documents, are kept.
+- **Run a virus scanner if you need one.** These checks refuse active content; they do not recognise malware in data.
+
 ## Development
 
 ```sh
 npm install
 npm test
 npm run typecheck
-npm run build   # dist/ with .d.ts; also runs on install from git
+npm run build   # dist/ with .d.ts
 ```
+
+Security issues: see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)
