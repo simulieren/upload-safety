@@ -6,6 +6,7 @@
 [![node](https://img.shields.io/badge/node-%E2%89%A522-339933)](package.json)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![types](https://img.shields.io/badge/types-TypeScript-3178c6)](src/index.ts)
+[![docs](https://img.shields.io/badge/docs-upload--safety--docs-0f766e)](https://upload-safety-docs.systemsloop.workers.dev)
 
 Server-side upload checks for Node that read the file, not just its name. An upload passes only when its extension, its declared MIME type and its bytes agree, and when it carries nothing that runs on its own: no macros, embedded objects, DDE fields, PDF scripts or CSV formulas. Photos, including iPhone HEIC, lose their GPS position and other metadata on the way through.
 
@@ -45,6 +46,8 @@ Every check fails closed: a part it cannot read is a refusal, not a pass.
 - **Typed reasons.** Each refusal is one of seven string literals, so a `Record<UploadRejection, string>` of messages is checked by the compiler.
 - **Fast enough to run inline.** Synchronous; 647 real documents up to 20 MB each took at most 65 ms on a laptop.
 - **Tested against crafted files.** 235 tests build malformed ZIPs, compound files and PDFs byte by byte, next to real Office and PDF files.
+
+Full documentation, with a page per format: **[upload-safety-docs.systemsloop.workers.dev](https://upload-safety-docs.systemsloop.workers.dev)**.
 
 ## Install
 
@@ -170,7 +173,7 @@ The library checks the bytes it is handed. The rest of the upload path is up to 
 - **Limit the request body before reading it.** `maxBytes` is checked after the whole file is in memory, so cap the body in your server or proxy first.
 - **Serve stored files as downloads.** Send `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`, and use the canonical `result.mimeType`, not the one the client declared. Serving uploads from a separate origin keeps a file that slips through away from your cookies.
 - **Limit image dimensions before resizing.** A small JPEG or PNG can declare a huge size. These checks do not decode images, so cap width and height in whatever makes thumbnails (sharp's `limitInputPixels`, ImageMagick's `policy.xml`).
-- **Expect metadata in documents.** Only JPEG and PNG uploads are stripped. Author names in Office and PDF files, and EXIF in images inside documents, are kept.
+- **Expect metadata in documents.** Only photos are stripped. Author names in Office and PDF files, and EXIF in images inside documents, are kept.
 - **Run a virus scanner if you need one.** These checks refuse active content; they do not recognise malware in data.
 
 ## Development

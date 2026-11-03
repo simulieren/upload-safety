@@ -1,0 +1,53 @@
+---
+title: Upload checks for Node
+description: Server-side upload checks for Node that read the file, not just its name. Refuses macros, embedded objects, DDE, PDF scripts and CSV formulas, and strips photo metadata. Zero dependencies.
+template: splash
+hero:
+  tagline: Server-side upload checks for Node that read the file, not just its name.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: What it catches
+      link: /what-it-catches/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/simulieren/upload-safety
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+An upload passes only when its extension, its declared MIME type and its bytes agree, and when it carries nothing that runs on its own. Built for apps that take CVs, invoices, contracts and photos from strangers and hand them to colleagues who open them in Office or Acrobat.
+
+```sh
+npm install upload-safety
+```
+
+```ts
+import { checkUpload } from 'upload-safety';
+
+const result = checkUpload( { filename, mimeType, bytes }, { maxBytes: 10 * 1024 * 1024 } );
+if ( ! result.ok ) {
+	// result.reason: 'macros', 'encrypted', 'content-mismatch', ...
+}
+// Store result.bytes under result.filename with result.mimeType.
+```
+
+<CardGrid>
+	<Card title="Refuses active content" icon="warning">
+		VBA and Excel 4.0 macros, embedded OLE objects, DDE fields, remote templates, PDF JavaScript and attachments, ODF event listeners and CSV formulas.
+	</Card>
+	<Card title="Strips photo metadata" icon="seti:image">
+		GPS, camera and XMP data come off JPEG, PNG, WebP, HEIC and AVIF photos. The orientation stays, the pixels are untouched.
+	</Card>
+	<Card title="Zero dependencies" icon="approve-check">
+		Only `node:zlib` and `node:crypto`. Nothing to audit but this package, and nothing that pulls in more.
+	</Card>
+	<Card title="Fails closed" icon="seti:lock">
+		A part it cannot read is a refusal, not a pass. Every rejection is one of seven typed reasons.
+	</Card>
+</CardGrid>
