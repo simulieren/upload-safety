@@ -1,6 +1,6 @@
 {
 	"name": "upload-safety",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "Server-side upload checks for Node: extension/MIME allowlist, magic bytes, refusal of macros, embedded objects, DDE, PDF scripts, CSV formulas and encrypted files, metadata stripping for JPEG, PNG, WebP, HEIC and AVIF.",
 	"keywords": [
 		"upload",
