@@ -1,5 +1,7 @@
 ---
-title: Express with multer
+title: Validate file uploads in Express with multer
+sidebar:
+  label: Express with multer
 description: Check uploads in an Express route with multer's memory storage.
 ---
 

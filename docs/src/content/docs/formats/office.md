@@ -1,5 +1,7 @@
 ---
-title: Microsoft Office
+title: Detect macros, OLE objects and DDE in Office uploads
+sidebar:
+  label: Microsoft Office
 description: Checks for Word, Excel and PowerPoint files, both OOXML and the legacy binary formats.
 ---
 

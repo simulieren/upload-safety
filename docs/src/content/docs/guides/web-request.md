@@ -1,5 +1,7 @@
 ---
-title: Web Request handlers
+title: Validate file uploads in Next.js, Hono and Remix
+sidebar:
+  label: Web Request handlers
 description: Use upload-safety in Next.js route handlers, Hono, Remix, Bun or any server that hands you a standard Request.
 ---
 

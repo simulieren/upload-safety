@@ -1,5 +1,7 @@
 ---
-title: OpenDocument
+title: Detect macros in OpenDocument uploads
+sidebar:
+  label: OpenDocument
 description: Checks for LibreOffice and OpenOffice text, spreadsheet and presentation files.
 ---
 

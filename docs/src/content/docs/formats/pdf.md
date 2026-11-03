@@ -1,5 +1,7 @@
 ---
-title: PDF
+title: Detect JavaScript and attachments in PDF uploads
+sidebar:
+  label: PDF
 description: What upload-safety checks in a PDF beyond the %PDF signature.
 ---
 

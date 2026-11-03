@@ -1,5 +1,7 @@
 ---
-title: CSV and text
+title: CSV injection in Node uploads
+sidebar:
+  label: CSV and text
 description: How CSV and TXT uploads are checked for binary data and formula injection.
 ---
 

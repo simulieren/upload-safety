@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://upload-safety.simonhalimonov.com/sitemap-index.xml

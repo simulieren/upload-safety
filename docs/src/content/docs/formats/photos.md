@@ -1,5 +1,7 @@
 ---
-title: Photos
+title: Strip GPS and EXIF from photo uploads in Node
+sidebar:
+  label: Photos
 description: How JPEG, PNG, WebP, HEIC, HEIF and AVIF uploads are checked and cleaned.
 ---
 

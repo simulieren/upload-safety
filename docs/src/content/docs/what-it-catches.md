@@ -1,5 +1,7 @@
 ---
-title: What it catches
+title: File upload validation beyond magic bytes
+sidebar:
+  label: What it catches
 description: Concrete uploads and what upload-safety does with each.
 ---
 
