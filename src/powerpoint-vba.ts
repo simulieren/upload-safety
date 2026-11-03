@@ -1,7 +1,8 @@
 /**
- * Finds out whether a legacy PowerPoint file (.ppt) holds a VBA project. PowerPoint
- * compresses the project into its document stream, so no VBA storage shows in the
- * OLE directory; the VBAInfoAtom of the DocumentContainer says whether there is one.
+ * Finds out whether a legacy PowerPoint file (.ppt) holds a VBA project or an embedded OLE
+ * object. PowerPoint compresses both into its document stream as ExOleObjStg records, so no
+ * storage shows in the OLE directory; the VBAInfoAtom of the DocumentContainer also says
+ * whether there is a project.
  */
 
 /** A record's type and the bounds of its body within the stream. */
@@ -22,6 +23,8 @@ const USER_EDIT_ATOM = 0x0ff5;
 const USER_EDIT_SIZE = 28;
 const PERSIST_DIRECTORY_ATOM = 0x1772;
 const DOCUMENT_CONTAINER = 0x03e8;
+/** RT_ExternalOleObjectStg, the storage of an embedded object or of the VBA project. */
+const EX_OLE_OBJECT_STORAGE = 0x1011;
 // DocumentContainer > DocInfoListContainer > VBAInfoContainer > VBAInfoAtom.
 const VBA_INFO_PATH = [ 0x07d0, 0x03ff, 0x0400 ];
 const VBA_INFO_SIZE = 12;
@@ -76,10 +79,10 @@ export function isEncryptedPowerPoint( currentUser: Buffer ): boolean {
 }
 
 /**
- * Whether any DocumentContainer that a user edit's persist directory points at
- * holds a VBA project; null for an encrypted or malformed file.
+ * Whether a user edit's persist directory points at an OLE object storage, or at a
+ * DocumentContainer that holds a VBA project; null for an encrypted or malformed file.
  */
-export function hasPowerPointVba( stream: Buffer, currentUser: Buffer ): boolean | null {
+export function hasPowerPointCode( stream: Buffer, currentUser: Buffer ): boolean | null {
 	const user = readRecord( currentUser, 0 );
 	if ( user?.type !== CURRENT_USER_ATOM || user.end < CURRENT_USER_FIELDS_END ||
 		currentUser.readUInt32LE( 12 ) !== UNENCRYPTED_TOKEN ) {
@@ -111,7 +114,11 @@ export function hasPowerPointVba( stream: Buffer, currentUser: Buffer ): boolean
 			}
 			for ( let entry = position + 4; entry < offsetsEnd; entry += 4 ) {
 				const offset = stream.readUInt32LE( entry );
-				if ( readRecord( stream, offset )?.type === DOCUMENT_CONTAINER ) {
+				const type = readRecord( stream, offset )?.type;
+				if ( type === EX_OLE_OBJECT_STORAGE ) {
+					return true;
+				}
+				if ( type === DOCUMENT_CONTAINER ) {
 					documents.add( offset );
 				}
 			}

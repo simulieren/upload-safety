@@ -8,10 +8,10 @@
 
 import { inspectExcelGlobals } from './excel-macro-sheets.js';
 import { readOleDirectory, type OleDirectory } from './ole-streams.js';
-import { isEncryptedPdf } from './pdf-encryption.js';
-import { hasPowerPointVba, isEncryptedPowerPoint } from './powerpoint-vba.js';
+import { inspectPdf } from './pdf-active-content.js';
+import { hasPowerPointCode, isEncryptedPowerPoint } from './powerpoint-vba.js';
 import { stripXmlMarkup } from './xml-markup.js';
-import { readZipEntries, readZipEntryData, type ZipEntry } from './zip-entries.js';
+import { readZipEntries, readZipEntryData, startsWithBytes, type ZipEntry } from './zip-entries.js';
 
 export type AllowedExtension =
 	| 'pdf' | 'doc' | 'docx' | 'ppt' | 'pptx' | 'xls' | 'xlsx' | 'odt' | 'ods' | 'odp' | 'jpg' | 'jpeg' | 'png';
@@ -45,10 +45,13 @@ const CONTENT_TYPE_ELEMENT = /<(?:[\w.-]+:)?(default|override)\b((?:[^>"']|"[^"]
 const RELATIONSHIP_ELEMENT = /<(?:[\w.-]+:)?relationship\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
 const XML_ATTRIBUTE = /\s+([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/y;
 // Excel 4.0 macro sheets run formulas such as EXEC without VBA.
-const OOXML_MACRO_CONTENT_TYPE = /application\/vnd\.ms-office\.vbaproject|macroenabled|application\/vnd\.ms-office\.activex|application\/vnd\.ms-excel\.(?:intl)?macrosheet/i;
-const OOXML_MACRO_RELATIONSHIP_TYPE = /\/vbaproject$|\/activexcontrol|\/control|\/xl(?:intl)?macrosheet$/i;
-// Linked OLE objects (CVE-2017-0199), subdocuments and frames fetch and run their external target.
-const OOXML_REMOTE_CODE_RELATIONSHIP_TYPE = /\/(?:oleobject|subdocument|frame)$/i;
+// Embedded OLE objects run their server on a double click: a Package runs any file, Equation Editor
+// has had exploits (CVE-2017-11882). Linked ones fetch and run their target on opening (CVE-2017-0199).
+// An altChunk imports an HTML, MHT or RTF part, which may carry such objects in turn.
+const OOXML_MACRO_CONTENT_TYPE = /application\/vnd\.ms-office\.vbaproject|macroenabled|application\/vnd\.ms-office\.activex|application\/vnd\.ms-excel\.(?:intl)?macrosheet|application\/vnd\.openxmlformats-officedocument\.oleobject/i;
+const OOXML_MACRO_RELATIONSHIP_TYPE = /\/vbaproject$|\/activexcontrol|\/control|\/xl(?:intl)?macrosheet$|\/oleobject$|\/afchunk$/i;
+// Subdocuments and frames fetch and run their external target.
+const OOXML_REMOTE_CODE_RELATIONSHIP_TYPE = /\/(?:subdocument|frame)$/i;
 const OOXML_TEMPLATE_RELATIONSHIP_TYPE = /\/attachedtemplate$/i;
 const LOCAL_DRIVE_PATH = /^(?:file:\/\/\/)?[a-z]:[\\/]/i;
 const XML_REFERENCE = /&(?:#(\d+)|#x([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g;
@@ -60,10 +63,31 @@ const CONTENT_TYPES_ENTRY = '[content_types].xml';
 const MAX_INSPECTED_RELATIONSHIPS = 200;
 const MAX_INSPECTED_PART_BYTES = 256 * 1024;
 const MAX_INSPECTED_TOTAL_BYTES = 2 * 1024 * 1024;
+/** Cap on the document text inflated to look for fields and event listeners; real files need a few MB. */
+const MAX_INSPECTED_CONTENT_BYTES = 64 * 1024 * 1024;
+// Word runs the command of a DDE field (with a prompt); QUOTE with character codes can spell one out.
+const WORD_STORY_PART = /^word\/[^/]*\.xml$|^word\/glossary\/[^/]*\.xml$/;
+const WORD_FIELD_INSTRUCTION = /<(?:[\w.-]+:)?instrText\b[^>]*>([^<]*)<|<(?:[\w.-]+:)?fldSimple\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+const DDE_FIELD = /\bDDE(?:AUTO)?\b|\bQUOTE\s+\d/i;
+// Excel keeps the server and topic of a DDE formula such as `=cmd|'/c calc'!A1` in an external link part.
+const EXCEL_EXTERNAL_LINK_PART = /^xl\/externallinks\/[^/]*\.xml$/;
+const EXCEL_DDE_LINK = /<(?:[\w.-]+:)?ddeLink[\s/>]/i;
+// The manifest is read on its own, as it may name OpenOffice.org's DTD.
+const OPEN_DOCUMENT_XML_PART = /^(?!meta-inf\/).*\.xml$/;
+// LibreOffice runs an event listener's macro or program (presentation:action="execute") when the event
+// fires, and a link to a macro URL when it is clicked.
+const OPEN_DOCUMENT_EVENT_LISTENER = /<(?:[\w.-]+:)?event-listener[\s/>]/i;
+const QUOTED_VALUE = /=\s*(?:"([^"]*)"|'([^']*)')/g;
+const OPEN_DOCUMENT_MACRO_URL = /^\s*(?:vnd\.sun\.star\.script|macro):/i;
 // LibreOffice keeps Basic modules under `Basic/`, other script languages under `Scripts/`.
 const OPEN_DOCUMENT_MACRO_ENTRY = /^(?:basic|scripts)\/./;
 // Word keeps macros in a `Macros` storage, Excel in `_VBA_PROJECT_CUR`; both hold `VBA`.
 const OLE_MACRO_ENTRIES = [ 'vba', '_vba_project', '_vba_project_cur', 'macros' ];
+// Word keeps embedded objects in `ObjectPool/_<number>`, Excel in `MBD<hex>` storages; a Package holds `\x01Ole10Native`.
+const OLE_EMBEDDED_OBJECT_ENTRY = /^_\d+$|^mbd[0-9a-f]{8}$|^\x01ole10native$/i;
+const OLE_SIGNATURE = [ 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1 ];
+/** Cap on what is inflated to read the start of every entry; real files need well under 1 MB. */
+const MAX_INSPECTED_PREFIX_BYTES = 32 * 1024 * 1024;
 // Office saves a password-protected docx, xlsx or pptx as a compound file of these streams.
 const ENCRYPTED_PACKAGE_STREAMS = [ 'EncryptionInfo', 'EncryptedPackage' ];
 /** FibBase `wIdent` of a Word 97 or later document and its `fEncrypted` flag [MS-DOC 2.5.2]. */
@@ -90,22 +114,62 @@ function readOoxmlParts( content: Buffer, entries: ZipEntry[] ): string[] | null
 		return null;
 	}
 	const parts = [ ...entries.filter( ( entry ) => entry.name.toLowerCase() === CONTENT_TYPES_ENTRY ), ...relationships ];
+	return readXmlParts( content, parts, MAX_INSPECTED_PART_BYTES, MAX_INSPECTED_TOTAL_BYTES );
+}
+
+/**
+ * The text of XML parts without comments and the like, or null when one of them does not inflate,
+ * decode or strip, or one or all together exceed their limit.
+ */
+function readXmlParts( content: Buffer, parts: ZipEntry[], partLimit: number, totalLimit: number ): string[] | null {
 	const texts: string[] = [];
-	let budget = MAX_INSPECTED_TOTAL_BYTES;
+	let budget = totalLimit;
 	for ( const part of parts ) {
-		const data = readZipEntryData( content, part, Math.min( MAX_INSPECTED_PART_BYTES, budget ) );
-		if ( ! data ) {
-			return null;
-		}
-		const decoded = decodeXmlPart( data );
+		const data = readZipEntryData( content, part, Math.min( partLimit, budget ) );
+		const decoded = data ? decodeXmlPart( data ) : null;
 		const text = decoded === null ? null : stripXmlMarkup( decoded );
-		if ( text === null ) {
+		if ( ! data || text === null ) {
 			return null;
 		}
 		budget -= data.length;
 		texts.push( text );
 	}
 	return texts;
+}
+
+/** The text parts of a ZIP package whose lower-case names match, or null when one does not read. */
+function readMatchingParts( content: Buffer, entries: ZipEntry[], name: RegExp ): string[] | null {
+	const parts = entries.filter( ( entry ) => name.test( entry.name.toLowerCase() ) );
+	return readXmlParts( content, parts, MAX_INSPECTED_CONTENT_BYTES, MAX_INSPECTED_CONTENT_BYTES );
+}
+
+/** Whether a Word part's field instructions, read together as Word does, name DDE. */
+function hasDdeField( part: string ): boolean {
+	const instructions = Array.from( part.matchAll( WORD_FIELD_INSTRUCTION ), ( [ , text, attributes ] ) => {
+		if ( text !== undefined ) {
+			return decodeXmlReferences( text );
+		}
+		// An element whose attributes do not parse counts as a field: Word may read it differently.
+		const values = readAttributes( attributes );
+		return values ? ( values.get( 'instr' ) ?? [] ).join( ' ' ) : 'DDE';
+	} );
+	return DDE_FIELD.test( instructions.join( '' ) );
+}
+
+function hasOpenDocumentEvent( part: string ): boolean {
+	return OPEN_DOCUMENT_EVENT_LISTENER.test( part ) || Array.from( part.matchAll( QUOTED_VALUE ) ).some(
+		( [ , doubleQuoted, singleQuoted ] ) => OPEN_DOCUMENT_MACRO_URL.test( decodeXmlReferences( doubleQuoted ?? singleQuoted ) )
+	);
+}
+
+/**
+ * Whether a package holds an entry that is an OLE compound file: an embedded object, or a VBA
+ * project under any name. Null when an entry does not inflate.
+ */
+function holdsOleEntry( content: Buffer, entries: ZipEntry[] ): boolean | null {
+	const budget = { bytes: MAX_INSPECTED_PREFIX_BYTES };
+	const verdicts = entries.map( ( entry ) => startsWithBytes( content, entry, OLE_SIGNATURE, budget ) );
+	return verdicts.includes( null ) ? null : verdicts.includes( true );
 }
 
 // Office decodes character references, so `vba&#80;roject` must not slip past the checks.
@@ -249,7 +313,7 @@ function inspectOleFile( content: Buffer, extension: AllowedExtension, oleStream
 		// Office opens an encrypted package by its content, whatever the extension.
 		return holdsEncryptedPackage( directory ) ? 'encrypted' : 'mismatch';
 	}
-	if ( directory.names.some( ( name ) => OLE_MACRO_ENTRIES.includes( name.toLowerCase() ) ) ) {
+	if ( directory.names.some( ( name ) => OLE_MACRO_ENTRIES.includes( name.toLowerCase() ) || OLE_EMBEDDED_OBJECT_ENTRY.test( name ) ) ) {
 		return 'macros';
 	}
 	if ( extension === 'xls' ) {
@@ -262,8 +326,8 @@ function inspectOleFile( content: Buffer, extension: AllowedExtension, oleStream
 	if ( isEncryptedPowerPoint( currentUser ) ) {
 		return 'encrypted';
 	}
-	const vba = hasPowerPointVba( stream, currentUser );
-	return vba === null ? 'mismatch' : vba ? 'macros' : 'valid';
+	const code = hasPowerPointCode( stream, currentUser );
+	return code === null ? 'mismatch' : code ? 'macros' : 'valid';
 }
 
 /** Whether an OpenDocument manifest lists encrypted entries, or null when it does not read. */
@@ -479,7 +543,7 @@ export function inspectFileContent( extension: AllowedExtension, bytes: Uint8Arr
 
 	const content = toBuffer( bytes );
 	if ( allowed.magic === 'pdf' ) {
-		return isEncryptedPdf( content ) ? 'encrypted' : 'valid';
+		return inspectPdf( content );
 	}
 	if ( allowed.oleStreams ) {
 		return inspectOleFile( content, allowed.extension, allowed.oleStreams );
@@ -501,7 +565,15 @@ export function inspectFileContent( extension: AllowedExtension, bytes: Uint8Arr
 			return 'macros';
 		}
 		const encrypted = isEncryptedOpenDocument( content, entries );
-		return encrypted === null ? 'mismatch' : encrypted ? 'encrypted' : 'valid';
+		if ( encrypted !== false ) {
+			return encrypted === null ? 'mismatch' : 'encrypted';
+		}
+		const ole = holdsOleEntry( content, entries );
+		const parts = ole === false ? readMatchingParts( content, entries, OPEN_DOCUMENT_XML_PART ) : null;
+		if ( ole === null || ( ! ole && ! parts ) ) {
+			return 'mismatch';
+		}
+		return ole || parts!.some( hasOpenDocumentEvent ) ? 'macros' : 'valid';
 	}
 
 	// The names alone give most macro files away, before anything is inflated.
@@ -513,7 +585,16 @@ export function inspectFileContent( extension: AllowedExtension, bytes: Uint8Arr
 		return 'mismatch';
 	}
 	const [ contentTypes = '', ...relationships ] = parts;
-	return declaresMacroPart( contentTypes, names ) || relationships.some( declaresMacroRelationship ) ?
+	if ( declaresMacroPart( contentTypes, names ) || relationships.some( declaresMacroRelationship ) ) {
+		return 'macros';
+	}
+	const ole = holdsOleEntry( content, entries );
+	const stories = ole === false ? readMatchingParts( content, entries, WORD_STORY_PART ) : null;
+	const externalLinks = stories ? readMatchingParts( content, entries, EXCEL_EXTERNAL_LINK_PART ) : null;
+	if ( ole === null || ( ! ole && ( ! stories || ! externalLinks ) ) ) {
+		return 'mismatch';
+	}
+	return ole || stories!.some( hasDdeField ) || externalLinks!.some( ( part ) => EXCEL_DDE_LINK.test( part ) ) ?
 		'macros' :
 		'valid';
 }

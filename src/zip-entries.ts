@@ -5,7 +5,7 @@
  * plain (non-ZIP64, single-disk, stored or deflated) format Office files use.
  */
 
-import { inflateRawSync } from 'node:zlib';
+import { constants, inflateRawSync } from 'node:zlib';
 
 export interface ZipEntry {
 	name: string;
@@ -20,8 +20,8 @@ export interface ZipEntry {
 
 /** Upper bounds that keep a crafted archive from passing as a document. */
 export const MAX_ZIP_ENTRIES = 2000;
-// Keep within clamd's MaxScanSize (total) and MaxFileSize (per entry): it reports
-// anything past them as clean, so change these together with the clamd config.
+// A scanner run after these checks should take at least this much: ClamAV, for one, reports content
+// past its MaxScanSize (total) and MaxFileSize (per entry) as clean.
 export const MAX_ZIP_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
 export const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
 
@@ -39,6 +39,11 @@ const DATA_DESCRIPTOR_SIZE = 12;
 const UTF8_NAME_FLAG = 0x0800;
 const STORED = 0;
 const DEFLATED = 8;
+/**
+ * Compressed bytes inflated, one size after the other, to read the start of an entry. A few dozen
+ * usually do; the last is enough for any block header.
+ */
+const PREFIX_INPUT_SIZES = [ 64, 1024, 16 * 1024 ];
 
 function findEndOfCentralDirectory( content: Buffer ): number {
 	const lowest = Math.max( 0, content.length - EOCD_SIZE - MAX_COMMENT_LENGTH );
@@ -209,4 +214,42 @@ export function readZipEntryData( content: Buffer, entry: ZipEntry, maxBytes: nu
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * The first bytes of an entry from {@link readZipEntries}, at least `length` of them, inflating only
+ * as much as that takes and taking what it inflates from `budget`; null when they do not inflate or
+ * the budget runs out.
+ */
+function readEntryPrefix( content: Buffer, entry: ZipEntry, length: number, budget: { bytes: number } ): Buffer | null {
+	const data = content.subarray( entry.dataOffset, entry.dataOffset + entry.compressedSize );
+	if ( entry.method === STORED ) {
+		return data.length >= length ? data : null;
+	}
+	for ( const size of PREFIX_INPUT_SIZES ) {
+		let prefix: Buffer;
+		try {
+			// A sync flush returns what the input so far decodes to instead of failing on the missing rest.
+			prefix = inflateRawSync( data.subarray( 0, size ), { finishFlush: constants.Z_SYNC_FLUSH, maxOutputLength: Math.max( 1, budget.bytes ) } );
+		} catch {
+			return null;
+		}
+		budget.bytes -= prefix.length;
+		if ( prefix.length >= length ) {
+			return prefix;
+		}
+	}
+	return null;
+}
+
+/**
+ * Whether an entry from {@link readZipEntries} starts with `signature`; null when its start does
+ * not inflate or the budget for inflating runs out.
+ */
+export function startsWithBytes( content: Buffer, entry: ZipEntry, signature: number[], budget: { bytes: number } ): boolean | null {
+	if ( entry.uncompressedSize < signature.length ) {
+		return false;
+	}
+	const prefix = readEntryPrefix( content, entry, signature.length, budget );
+	return prefix && signature.every( ( byte, index ) => prefix[ index ] === byte );
 }

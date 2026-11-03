@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { stripXmlMarkup } from './xml-markup.js';
 
 describe( 'stripXmlMarkup', () => {
-	it( 'drops a leading declaration, comments, CDATA and processing instructions', () => {
-		expect( stripXmlMarkup( '<?xml version="1.0"?>\n<a><!-- x --><b c="1>2"/><![CDATA[<d>]]><?pi x?></a>' ) ).toBe( '\n<a><b c="1>2"/></a>' );
+	it( 'drops a leading declaration, comments and processing instructions and escapes CDATA', () => {
+		expect( stripXmlMarkup( '<?xml version="1.0"?>\n<a><!-- x --><b c="1>2"/><![CDATA[<d>&]]><?pi x?></a>' ) ).toBe( '\n<a><b c="1>2"/>&lt;d&gt;&amp;</a>' );
 	} );
 
 	it( 'refuses a declaration after other content, markup left open and `<` in a quoted value', () => {

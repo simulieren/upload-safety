@@ -169,8 +169,17 @@ function biffRecord( type: number, body: Buffer ): Buffer {
 	return Buffer.concat( [ header, body ] );
 }
 
-/** The globals of a BIFF8 Workbook stream: BOF, one BoundSheet8 per sheet, EOF. */
-export function buildWorkbook( sheets: WorkbookSheet[] ): Buffer {
+/** A SupBook record: `ctab` sheets, then the path length (or a self or add-in marker) and the path. */
+export function supBook( sheetCount: number, pathLength: number, path = '' ): Buffer {
+	const body = Buffer.alloc( 5 + path.length );
+	body.writeUInt16LE( sheetCount, 0 );
+	body.writeUInt16LE( pathLength, 2 );
+	body.write( path, 5, 'latin1' );
+	return biffRecord( 0x01ae, path ? body : body.subarray( 0, 4 ) );
+}
+
+/** The globals of a BIFF8 Workbook stream: BOF, one BoundSheet8 per sheet, further records, EOF. */
+export function buildWorkbook( sheets: WorkbookSheet[], records: Buffer[] = [] ): Buffer {
 	const bof = Buffer.alloc( 16 );
 	bof.writeUInt16LE( 0x0600, 0 );
 	bof.writeUInt16LE( 0x0005, 2 );
@@ -183,7 +192,7 @@ export function buildWorkbook( sheets: WorkbookSheet[] ): Buffer {
 		name.copy( body, 8 );
 		return biffRecord( 0x0085, body );
 	} );
-	return Buffer.concat( [ biffRecord( 0x0809, bof ), ...boundSheets, biffRecord( 0x000a, Buffer.alloc( 0 ) ) ] );
+	return Buffer.concat( [ biffRecord( 0x0809, bof ), ...boundSheets, ...records, biffRecord( 0x000a, Buffer.alloc( 0 ) ) ] );
 }
 
 function record( type: number, body: Buffer, version = 0, instance = 0 ): Buffer {
@@ -207,24 +216,30 @@ export interface PowerPointFixture {
 	documentLength?: number;
 	/** CurrentUserAtom header token; PowerPoint writes another one for encrypted files. */
 	token?: number;
+	/** Further persist objects, such as ExOleObjStg records, after the DocumentContainer. */
+	objects?: Buffer[];
 }
 
 /** The streams of a PowerPoint file: one user edit whose persist directory points at the document. */
 export function buildPowerPoint( {
-	hasMacros, vbaProjectRef = 0, prefix = Buffer.alloc( 0 ), documentLength, token = 0xe391c05f,
+	hasMacros, vbaProjectRef = 0, prefix = Buffer.alloc( 0 ), documentLength, token = 0xe391c05f, objects = [],
 }: PowerPointFixture = {} ): Record<string, Buffer> {
 	const vbaInfo = hasMacros === undefined ? [] : [ container( 0x03ff, [ record( 0x0400, uint32s( [ vbaProjectRef, hasMacros, 2 ] ), 2 ) ], 1 ) ];
 	const document = container( 0x03e8, [ record( 0x03e9, Buffer.alloc( 40 ), 1 ), container( 0x07d0, vbaInfo ) ] );
 	if ( documentLength !== undefined ) {
 		document.writeUInt32LE( documentLength, 4 );
 	}
-	const directoryOffset = prefix.length + document.length;
-	const directory = record( 0x1772, uint32s( [ 1 | ( 1 << 20 ), prefix.length ] ) );
+	const offsets = [ prefix.length ];
+	for ( const object of [ document, ...objects.slice( 0, -1 ) ] ) {
+		offsets.push( offsets[ offsets.length - 1 ] + object.length );
+	}
+	const directoryOffset = prefix.length + document.length + objects.reduce( ( sum, object ) => sum + object.length, 0 );
+	const directory = record( 0x1772, uint32s( [ 1 | ( offsets.length << 20 ), ...offsets ] ) );
 	const editOffset = directoryOffset + directory.length;
 	const edit = record( 0x0ff5, uint32s( [ 0, 0x03000000, 0, directoryOffset, 1, 1, 0 ] ) );
 	const currentUser = record( 0x0ff6, uint32s( [ 0x14, token, editOffset, 0x03f40000, 0x0003 ] ) );
 	return {
-		'PowerPoint Document': Buffer.concat( [ prefix, document, directory, edit ] ),
+		'PowerPoint Document': Buffer.concat( [ prefix, document, ...objects, directory, edit ] ),
 		'Current User': currentUser,
 	};
 }

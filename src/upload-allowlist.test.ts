@@ -10,7 +10,7 @@ import {
 	validateUploadDescriptor,
 } from './upload-allowlist.js';
 import {
-	buildOle, buildPowerPoint, buildWorkbook, oleSectorOffset, SHEET_TYPE
+	buildOle, buildPowerPoint, buildWorkbook, oleSectorOffset, SHEET_TYPE, supBook
 } from './ole-fixture.js';
 import { MAX_ZIP_ENTRIES, readZipEntries } from './zip-entries.js';
 import { buildZip, type ZipFixtureEntry } from './zip-fixture.js';
@@ -138,7 +138,7 @@ const XLSX = { '[Content_Types].xml': '<Types/>', 'xl/workbook.xml': '<workbook/
 const PPTX = { '[Content_Types].xml': '<Types/>', 'ppt/presentation.xml': '<p:presentation/>' };
 
 /** An OpenDocument file: `mimetype` first and stored, then the content. */
-function openDocument( mimeType: string, files: Record<string, string> = {} ): Uint8Array {
+function openDocument( mimeType: string, files: Record<string, string | ZipFixtureEntry> = {} ): Uint8Array {
 	return buildZip( { mimetype: mimeType, 'content.xml': '<office:document-content/>', ...files } );
 }
 
@@ -226,6 +226,16 @@ describe( 'inspectFileContent', () => {
 		expect( inspectFileContent( 'xls', workbook( worksheet, { type: SHEET_TYPE.macro, state: 2 } ) ) ).toBe( 'macros' );
 		expect( inspectFileContent( 'xls', workbook( worksheet, { type: SHEET_TYPE.module } ) ) ).toBe( 'macros' );
 		expect( inspectFileContent( 'xls', workbook( worksheet, { type: SHEET_TYPE.chart } ) ) ).toBe( 'valid' );
+	} );
+
+	it( 'rejects DDE and OLE links in a legacy workbook, but not references to itself, add-ins or other workbooks', () => {
+		const workbook = ( ...records: Buffer[] ) => buildOle( { Workbook: buildWorkbook( [ { type: SHEET_TYPE.worksheet } ], records ) } );
+		const dde = 'cmd\u0003/c calc';
+
+		expect( inspectFileContent( 'xls', workbook( supBook( 0, dde.length, dde ) ) ) ).toBe( 'macros' );
+		expect( inspectFileContent( 'xls', workbook( supBook( 1, 0x0401 ), supBook( 0, dde.length, dde ) ) ) ).toBe( 'macros' );
+		expect( inspectFileContent( 'xls', workbook( supBook( 1, 0x0401 ), supBook( 0, 0x3a01 ) ) ) ).toBe( 'valid' );
+		expect( inspectFileContent( 'xls', workbook( supBook( 2, 'Book2.xls'.length, 'Book2.xls' ) ) ) ).toBe( 'valid' );
 	} );
 
 	it( 'rejects Excel 4.0 macro sheets in OOXML by content type or relationship', () => {
@@ -696,6 +706,80 @@ describe( 'inspectFileContent', () => {
 
 		expect( inspectFileContent( 'docx', buildZip( { ...DOCX, ...relationships } ) ) ).toBe( 'mismatch' );
 		expect( inspectFileContent( 'docx', buildZip( { ...DOCX, ...Object.fromEntries( Object.entries( relationships ).slice( 0, 5 ) ) } ) ) ).toBe( 'valid' );
+	} );
+
+	describe( 'embedded objects and other active content', () => {
+		const oleEntry = ( deflate: boolean ): ZipFixtureEntry => ( {
+			text: String.fromCharCode( 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1 ) + 'x'.repeat( 3000 ), encoding: 'latin1', deflate,
+		} );
+		const relationship = ( type: string ) => buildZip( {
+			...DOCX,
+			'word/_rels/document.xml.rels': `<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${ type }" Target="part.bin"/></Relationships>`,
+		} );
+		const word = ( body: string ) => buildZip( { ...DOCX, 'word/document.xml': `<w:document><w:body>${ body }</w:body></w:document>`, 'word/footer1.xml': '<w:ftr/>' } );
+		const run = ( instruction: string ) => `<w:r><w:instrText xml:space="preserve">${ instruction }</w:instrText></w:r>`;
+
+		it( 'refuses an embedded OLE object in an OOXML or OpenDocument package, stored or deflated', () => {
+			for ( const deflate of [ false, true ] ) {
+				expect( inspectFileContent( 'docx', buildZip( { ...DOCX, 'word/embeddings/oleObject1.bin': oleEntry( deflate ) } ) ) ).toBe( 'macros' );
+				expect( inspectFileContent( 'odt', openDocument( 'application/vnd.oasis.opendocument.text', { 'Object 1': oleEntry( deflate ) } ) ) ).toBe( 'macros' );
+			}
+		} );
+
+		it( 'refuses an internal OLE object or an altChunk by its relationship', () => {
+			expect( inspectFileContent( 'docx', relationship( 'oleObject' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', relationship( 'aFChunk' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', relationship( 'image' ) ) ).toBe( 'valid' );
+		} );
+
+		it( 'accepts an embedded chart workbook, which is a ZIP package and not an OLE object', () => {
+			expect( inspectFileContent( 'docx', buildZip( { ...DOCX, 'word/embeddings/Microsoft_Excel_Worksheet.xlsx': 'PK\u0003\u0004 chart data' } ) ) ).toBe( 'valid' );
+		} );
+
+		it( 'refuses DDE fields, also split across runs, in CDATA, simple fields or spelled with QUOTE', () => {
+			expect( inspectFileContent( 'docx', word( run( ' DDEAUTO c:\\windows\\system32\\cmd.exe "/k calc"' ) ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', word( run( ' DD' ) + run( 'E cmd "/c calc"' ) ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', word( '<w:r><w:instrText><![CDATA[DDEAUTO cmd]]></w:instrText></w:r>' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', word( '<w:r><w:instrText>&#68;DE cmd</w:instrText></w:r>' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', word( '<w:fldSimple w:instr=" DDE cmd &quot;/c calc&quot;"/>' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', word( run( 'QUOTE 68 68 69 65 85 84 79' ) ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'docx', buildZip( { ...DOCX, 'word/header1.xml': `<w:hdr>${ run( 'DDEAUTO cmd' ) }</w:hdr>` } ) ) ).toBe( 'macros' );
+		} );
+
+		it( 'accepts ordinary fields and text that mentions DDE', () => {
+			expect( inspectFileContent( 'docx', word( run( ' PAGE ' ) + run( ' HYPERLINK "https://example.com/" ' ) ) ) ).toBe( 'valid' );
+			expect( inspectFileContent( 'docx', word( '<w:r><w:t>DDEAUTO is a field type</w:t></w:r>' ) ) ).toBe( 'valid' );
+		} );
+
+		it( 'refuses an Excel DDE link but not a link to another workbook', () => {
+			const link = ( body: string ) => buildZip( { ...XLSX, 'xl/externalLinks/externalLink1.xml': `<externalLink>${ body }</externalLink>` } );
+			expect( inspectFileContent( 'xlsx', link( '<ddeLink ddeService="cmd" ddeTopic="/c calc"/>' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'xlsx', link( '<externalBook r:id="rId1"/>' ) ) ).toBe( 'valid' );
+		} );
+
+		it( 'refuses LibreOffice event listeners and links to macros', () => {
+			const odt = ( content: string, name = 'content.xml' ) => openDocument( 'application/vnd.oasis.opendocument.text', { [ name ]: content } );
+			const listener = '<office:event-listeners><script:event-listener script:language="ooo:script" script:event-name="dom:load" xlink:href="vnd.sun.star.script:Standard.Module1.Main?language=Basic&amp;location=application"/></office:event-listeners>';
+			expect( inspectFileContent( 'odt', odt( `<office:document-content>${ listener }</office:document-content>` ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'odt', odt( '<office:document-styles><presentation:event-listener presentation:action="execute" xlink:href="calc.exe"/></office:document-styles>', 'styles.xml' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'odt', odt( '<office:document-content><text:a xlink:href="vnd.sun.star.script&#58;x">x</text:a></office:document-content>' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'odt', odt( '<office:document-content><text:a xlink:href="macro:///Standard.Module1.Main">x</text:a></office:document-content>' ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'odt', odt( '<office:document-content><text:p>A macro: nothing to run</text:p><text:a xlink:href="https://example.com/">x</text:a></office:document-content>' ) ) ).toBe( 'valid' );
+		} );
+
+		it( 'accepts a LibreOffice chart, which is a sub-document and not an OLE object', () => {
+			expect( inspectFileContent( 'odt', openDocument( 'application/vnd.oasis.opendocument.text', { 'Object 1/content.xml': '<office:document-content/>' } ) ) ).toBe( 'valid' );
+		} );
+
+		it( 'refuses embedded objects in legacy Office files', () => {
+			expect( inspectFileContent( 'doc', buildOle( { ...DOC, 'ObjectPool/_1234567890/\u0001CompObj': 'x' } ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'doc', buildOle( { ...DOC, 'ObjectPool/_1234567890/\u0001Ole10Native': 'x' } ) ) ).toBe( 'macros' );
+			expect( inspectFileContent( 'xls', buildOle( { ...XLS, 'MBD0012ABCD/\u0001CompObj': 'x' } ) ) ).toBe( 'macros' );
+			const storage = Buffer.alloc( 16 );
+			storage.writeUInt16LE( 0x1011, 2 );
+			storage.writeUInt32LE( 8, 4 );
+			expect( inspectFileContent( 'ppt', buildOle( buildPowerPoint( { hasMacros: 0, objects: [ storage ] } ) ) ) ).toBe( 'macros' );
+		} );
 	} );
 
 	it( 'rejects LibreOffice files that contain Basic or other scripts', () => {

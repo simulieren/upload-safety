@@ -11,7 +11,7 @@ export interface ZipFixtureEntry {
 	/** Name written to the local header instead of the central one. */
 	localName?: string;
 	/** Encoding of `text`, written with its byte order mark when `bom` is set. */
-	encoding?: 'utf8' | 'utf16le' | 'utf16be';
+	encoding?: 'utf8' | 'latin1' | 'utf16le' | 'utf16be';
 	bom?: boolean;
 	/** Compressed size written to the local header (or data descriptor) instead of the real one. */
 	localCompressedSize?: number;
@@ -28,11 +28,11 @@ export interface ZipFixtureEntry {
 const DATA_DESCRIPTOR_FLAG = 0x0008;
 
 const BYTE_ORDER_MARKS = {
-	utf8: [ 0xef, 0xbb, 0xbf ], utf16le: [ 0xff, 0xfe ], utf16be: [ 0xfe, 0xff ],
+	utf8: [ 0xef, 0xbb, 0xbf ], latin1: [], utf16le: [ 0xff, 0xfe ], utf16be: [ 0xfe, 0xff ],
 };
 
 function encodeText( { text, encoding = 'utf8', bom = false }: ZipFixtureEntry ): Buffer {
-	const encoded = Buffer.from( text, encoding === 'utf8' ? 'utf8' : 'utf16le' );
+	const encoded = Buffer.from( text, encoding === 'utf16be' ? 'utf16le' : encoding );
 	if ( encoding === 'utf16be' ) {
 		encoded.swap16();
 	}

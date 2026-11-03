@@ -46,21 +46,25 @@ const ENCRYPT_NAME = /\/(?:E|#45)(?:n|#6[Ee])(?:c|#63)(?:r|#72)(?:y|#79)(?:p|#70
 // The regex runs on text, which is copied a window at a time: most uploads have no `/Encrypt` at all
 // and must not cost a second copy of the whole file.
 const SEARCH_WINDOW = 1024 * 1024;
-// Longer than the longest name (`/` and seven `#xx`) and the byte after it, which ends the name.
-const WINDOW_OVERLAP = 32;
+// Longer than the longest name searched for (`/` and fourteen `#xx`) and the byte after it, which ends the name.
+const WINDOW_OVERLAP = 64;
 
-/** Where each `/Encrypt` name starts, in file order and up to one past the bound. */
-function findEncryptNames( content: Buffer ): number[] {
+/** Where each match of a global `pattern` starts, in file order and up to one past `limit`. */
+export function findNames( content: Buffer, pattern: RegExp, limit: number ): number[] {
 	const positions: number[] = [];
-	for ( let from = 0; from < content.length && positions.length <= MAX_ENCRYPT_NAMES; from += SEARCH_WINDOW ) {
+	for ( let from = 0; from < content.length && positions.length <= limit; from += SEARCH_WINDOW ) {
 		const window = content.toString( 'latin1', from, Math.min( content.length, from + SEARCH_WINDOW + WINDOW_OVERLAP ) );
-		for ( const match of window.matchAll( ENCRYPT_NAME ) ) {
+		for ( const match of window.matchAll( pattern ) ) {
 			if ( match.index < SEARCH_WINDOW ) {
 				positions.push( from + match.index );
 			}
 		}
 	}
 	return positions;
+}
+
+export function hasEncryptName( content: Buffer ): boolean {
+	return findNames( content, ENCRYPT_NAME, 0 ).length > 0;
 }
 
 type PdfValue =
@@ -73,7 +77,7 @@ type PdfValue =
 	| { kind: 'array'; items: PdfValue[] }
 	| PdfDictionary;
 
-type PdfDictionary = {
+export type PdfDictionary = {
 	kind: 'dict';
 	entries: Map<string, PdfValue>;
 	/** Where each key's `/` sits, to tell which dictionary an `/Encrypt` name belongs to. */
@@ -307,8 +311,10 @@ export class PdfReader {
 	}
 }
 
-/** The innermost dictionary whose own `/Encrypt` key starts at `keyOffset`, trying each earlier `<<`. */
-function findEnclosingDictionary( content: Buffer, keyOffset: number, budget: { bytes: number } ): PdfDictionary | undefined {
+/**
+ * The innermost dictionary whose own `key` starts at `keyOffset`, trying each earlier `<<`, and where it ends.
+ */
+export function findEnclosingDictionary( content: Buffer, key: string, keyOffset: number, budget: { bytes: number } ): { dictionary: PdfDictionary; end: number } | undefined {
 	const floor = Math.max( 0, keyOffset - MAX_DICTIONARY_LOOKBACK );
 	let candidates = 0;
 	for ( let start = keyOffset - 2; start >= floor && candidates < MAX_DICTIONARY_CANDIDATES && budget.bytes > 0; start-- ) {
@@ -319,8 +325,8 @@ function findEnclosingDictionary( content: Buffer, keyOffset: number, budget: { 
 		const reader = new PdfReader( content, start );
 		const value = reader.tryRead();
 		budget.bytes -= reader.position - start + 1;
-		if ( value?.kind === 'dict' && value.keyOffsets.get( 'Encrypt' ) === keyOffset ) {
-			return value;
+		if ( value?.kind === 'dict' && value.keyOffsets.get( key ) === keyOffset ) {
+			return { dictionary: value, end: reader.position };
 		}
 	}
 	return undefined;
@@ -587,13 +593,13 @@ function readEncryptionEntries( content: Buffer ): EncryptionEntry[] | undefined
 	const entries: EncryptionEntry[] = [];
 	const objects = new Map<string, PdfDictionary[] | undefined>();
 	const budget = { bytes: MAX_PARSED_BYTES };
-	const positions = findEncryptNames( content );
+	const positions = findNames( content, ENCRYPT_NAME, MAX_ENCRYPT_NAMES );
 	if ( positions.length > MAX_ENCRYPT_NAMES ) {
 		return undefined;
 	}
 	let text: string | undefined;
 	for ( const position of positions ) {
-		const trailer = findEnclosingDictionary( content, position, budget );
+		const trailer = findEnclosingDictionary( content, 'Encrypt', position, budget )?.dictionary;
 		const value = trailer?.entries.get( 'Encrypt' );
 		let dictionaries = value?.kind === 'dict' ? [ value ] : undefined;
 		if ( value?.kind === 'ref' ) {

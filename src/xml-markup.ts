@@ -1,7 +1,7 @@
 /**
  * Reduces an XML part to its elements and text before pattern matching: drops
- * comments, CDATA sections and processing instructions, whose content could
- * otherwise open a quote or a tag that hides a real element.
+ * comments and processing instructions and escapes CDATA sections, whose content
+ * could otherwise open a quote or a tag that hides a real element.
  */
 
 const SKIPPED_MARKUP = [
@@ -10,9 +10,12 @@ const SKIPPED_MARKUP = [
 	{ start: '<?', end: '?>' },
 ] as const;
 const XML_DECLARATION = /^<\?xml[\s?]/i;
+const CDATA_START = '<![CDATA[';
+const MARKUP_CHARACTERS = /[&<>]/g;
+const ESCAPED: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
 
 /**
- * The part without comments, CDATA sections and processing instructions, or null when
+ * The part without comments and processing instructions, with CDATA sections as escaped text, or null when
  * one is unterminated, a `<!DOCTYPE` or other `<!` remains, a quoted value holds `<`,
  * a tag is unterminated, an XML declaration is not first, or the text holds NUL.
  */
@@ -38,6 +41,10 @@ export function stripXmlMarkup( text: string ): string | null {
 				return null;
 			}
 			kept.push( text.slice( keptFrom, open ) );
+			// CDATA is text, such as a Word field instruction, and stays as such.
+			if ( markup.start === CDATA_START ) {
+				kept.push( text.slice( open + CDATA_START.length, close ).replace( MARKUP_CHARACTERS, ( character ) => ESCAPED[ character ] ) );
+			}
 			position = keptFrom = close + markup.end.length;
 			continue;
 		}
