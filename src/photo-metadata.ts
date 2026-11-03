@@ -9,8 +9,9 @@
 import { crc32 } from 'node:zlib';
 
 import { stripHeif } from './heif-metadata.js';
-import { checkBmp, checkIco, checkOgg, stripFlac, stripGif, stripMp3, stripWav } from './media-formats.js';
-import { stripIsoMedia, stripWebm } from './video-formats.js';
+import { inspectAsf } from './asf-media.js';
+import { checkBmp, checkIco, checkOgg, stripAac, stripFlac, stripGif, stripMp3, stripWav } from './media-formats.js';
+import { stripAvi, stripIsoMedia, stripMatroska } from './video-formats.js';
 
 import type { AllowedExtension } from './upload-allowlist.js';
 
@@ -346,7 +347,16 @@ export function stripPhotoMetadata( extension: AllowedExtension, bytes: Uint8Arr
 		case 'mov':
 			return stripIsoMedia( content, null );
 		case 'webm':
-			return stripWebm( content );
+			return stripMatroska( content, 'webm' );
+		case 'mkv':
+			return stripMatroska( content, 'matroska' );
+		case 'aac':
+			return stripAac( content );
+		case 'avi':
+			return stripAvi( content );
+		case 'wma':
+		case 'wmv':
+			return inspectAsf( content, extension === 'wmv' ).bytes;
 		default:
 			return bytes;
 	}

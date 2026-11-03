@@ -1,9 +1,9 @@
 /**
- * Checks the structure of MP4, MOV, M4A and WebM files and removes their metadata (GPS,
+ * Checks the structure of MP4, MOV, M4A, WebM, Matroska and AVI files and removes their metadata (GPS,
  * titles, cover art, XMP) without moving a byte, so sample offsets and cluster positions stay
  * valid and a large video is not re-encoded. Boxes and elements are overwritten in place:
- * ISOBMFF boxes become `free` boxes with a zeroed payload, WebM elements become `Void`
- * elements of the same length.
+ * ISOBMFF boxes become `free` boxes with a zeroed payload, WebM and Matroska elements become
+ * `Void` elements of the same length and AVI chunks become zeroed `JUNK` chunks.
  *
  * Limitation: metadata stored as samples in a timed metadata track (GoPro GPMF, DJI, Apple
  * `mebx`) lives in `mdat` or in clusters, which are never touched, so it stays.
@@ -121,6 +121,7 @@ const CLUSTER = 0x1f43b675;
 const TITLE = 0x7ba9;
 const VOID = 0xec;
 const WEBM_DOC_TYPE = 'webm';
+const MATROSKA_DOC_TYPE = 'matroska';
 /** The elements a cluster may hold; the first other ID ends a cluster of unknown size. */
 const CLUSTER_CHILDREN: ReadonlySet<number> = new Set( [ 0xe7, 0x5854, 0xa7, 0xab, 0xa3, 0xa0, 0xaf, VOID, 0xbf ] );
 const MAX_VINT_LENGTH = 8;
@@ -219,19 +220,24 @@ function sizeBytes( value: number, width: number ): Buffer {
 }
 
 /**
- * The WebM file with its Tags, Attachments and Title overwritten by `Void` elements of the same
- * length, the input itself when there was nothing to remove, or null when it is not a WebM
- * (`matroska` is refused) or its elements do not read. A cluster of unknown size, as live
+ * The WebM or Matroska file with its Tags, Attachments (in Matroska they can hold any file) and Title
+ * overwritten by `Void` elements of the same length, the input itself when there was nothing to remove,
+ * or null when its DocType is not allowed or its elements do not read. `webm` allows only WebM;
+ * `matroska` allows both, as a WebM file is a Matroska file. A cluster of unknown size, as live
  * recorders write, ends at the first element a cluster cannot hold.
  */
-export function stripWebm( content: Buffer ): Buffer | null {
+export function stripMatroska( content: Buffer, docType: 'webm' | 'matroska' ): Buffer | null {
 	const header = readElement( content, 0, content.length );
 	if ( ! header || header.id !== EBML_HEADER || header.end === null ) {
 		return null;
 	}
 	const headerChildren = readChildren( content, header );
-	const docType = headerChildren?.find( ( child ) => child.id === DOC_TYPE );
-	if ( ! docType || content.toString( 'latin1', docType.data, docType.end! ).replace( /\0+$/, '' ) !== WEBM_DOC_TYPE ) {
+	const docTypeElement = headerChildren?.find( ( child ) => child.id === DOC_TYPE );
+	if ( ! docTypeElement ) {
+		return null;
+	}
+	const found = content.toString( 'latin1', docTypeElement.data, docTypeElement.end! ).replace( /\0+$/, '' );
+	if ( found !== WEBM_DOC_TYPE && ! ( docType === 'matroska' && found === MATROSKA_DOC_TYPE ) ) {
 		return null;
 	}
 	const segment = readElement( content, header.end, content.length );
@@ -282,6 +288,111 @@ export function stripWebm( content: Buffer ): Buffer | null {
 			return null;
 		}
 		element.copy( stripped, start );
+	}
+	return stripped;
+}
+
+const RIFF_HEADER_SIZE = 12;
+const RIFF_CHUNK_HEADER_SIZE = 8;
+const MAX_AVI_CHUNKS = 100_000;
+const MAX_AVI_DEPTH = 8;
+const AVI_FORM = 'AVI ';
+const AVI_EXTENSION_FORM = 'AVIX';
+const JUNK = 'JUNK';
+const LIST = 'LIST';
+/** Chunks that hold text, XMP or vendor data; the `INFO` list is handled apart because it is a list. */
+const AVI_METADATA_CHUNKS: ReadonlySet<string> = new Set( [ 'IDIT', 'ISMP', '_PMX', 'strd', 'strn' ] );
+
+interface AviState {
+	chunks: number;
+	hasHeader: boolean;
+	hasMovie: boolean;
+	blanks: Array<[ number, number ]>;
+}
+
+/** Whether `[start, end)` of `bytes` is already a `JUNK` chunk of zeros, so blanking it changes nothing. */
+function isBlankJunk( bytes: Buffer, start: number, end: number ): boolean {
+	return bytes.toString( 'latin1', start, start + 4 ) === JUNK && ! bytes.subarray( start + RIFF_CHUNK_HEADER_SIZE, end ).some( ( byte ) => byte !== 0 );
+}
+
+/**
+ * Walks the RIFF chunks tiling `[start, end)` and records the ones to blank. Returns false when a chunk runs
+ * past its parent, bytes are left over, or the limits on chunks and depth are exceeded.
+ */
+function walkAvi( bytes: Buffer, start: number, end: number, depth: number, parent: string, firstRiff: boolean, state: AviState ): boolean {
+	if ( depth > MAX_AVI_DEPTH ) {
+		return false;
+	}
+	let offset = start;
+	while ( offset < end ) {
+		if ( ++state.chunks > MAX_AVI_CHUNKS || offset + RIFF_CHUNK_HEADER_SIZE > end ) {
+			return false;
+		}
+		const type = bytes.toString( 'latin1', offset, offset + 4 );
+		const size = bytes.readUInt32LE( offset + 4 );
+		const dataStart = offset + RIFF_CHUNK_HEADER_SIZE;
+		if ( size > end - dataStart ) {
+			return false;
+		}
+		const next = Math.min( dataStart + size + ( size & 1 ), end );
+		if ( type === LIST ) {
+			if ( size < 4 ) {
+				return false;
+			}
+			const listType = bytes.toString( 'latin1', dataStart, dataStart + 4 );
+			if ( listType === 'INFO' ) {
+				state.blanks.push( [ offset, next ] );
+			} else if ( listType === 'movi' ) {
+				state.hasMovie ||= firstRiff;
+			} else if ( ! walkAvi( bytes, dataStart + 4, dataStart + size, depth + 1, listType, firstRiff, state ) ) {
+				return false;
+			}
+		} else if ( AVI_METADATA_CHUNKS.has( type ) || type === JUNK ) {
+			state.blanks.push( [ offset, next ] );
+		} else if ( type === 'avih' && parent === 'hdrl' ) {
+			state.hasHeader ||= firstRiff;
+		}
+		offset = next;
+	}
+	return true;
+}
+
+/**
+ * The AVI with its `INFO` lists and its `IDIT`, `ISMP`, `_PMX` (XMP), `strd` (vendor data) and `strn`
+ * chunks, and the contents of `JUNK` chunks, overwritten by zeroed `JUNK` chunks of the same size, the input
+ * itself when there was nothing to remove, or null when the chunks do not read, the first RIFF lacks `hdrl`
+ * with `avih` or `movi`, or bytes follow the last RIFF. OpenDML `AVIX` RIFFs after the first are read the
+ * same way. No byte moves, so the `idx1` offsets stay valid; `movi` and `idx1` are never touched.
+ */
+export function stripAvi( content: Buffer ): Buffer | null {
+	const state: AviState = { chunks: 0, hasHeader: false, hasMovie: false, blanks: [] };
+	let offset = 0;
+	for ( let riffs = 0; offset < content.length; riffs++ ) {
+		if ( offset + RIFF_HEADER_SIZE > content.length || content.toString( 'latin1', offset, offset + 4 ) !== 'RIFF' ) {
+			return null;
+		}
+		const form = content.toString( 'latin1', offset + 8, offset + 12 );
+		if ( form !== ( riffs === 0 ? AVI_FORM : AVI_EXTENSION_FORM ) ) {
+			return null;
+		}
+		const size = content.readUInt32LE( offset + 4 );
+		const end = offset + RIFF_CHUNK_HEADER_SIZE + size;
+		if ( size < 4 || end > content.length || ! walkAvi( content, offset + RIFF_HEADER_SIZE, end, 0, form, riffs === 0, state ) ) {
+			return null;
+		}
+		offset = Math.min( end + ( size & 1 ), content.length );
+	}
+	if ( ! state.hasHeader || ! state.hasMovie ) {
+		return null;
+	}
+	const changes = state.blanks.filter( ( [ start, end ] ) => ! isBlankJunk( content, start, end ) );
+	if ( changes.length === 0 ) {
+		return content;
+	}
+	const stripped = Buffer.from( content );
+	for ( const [ start, end ] of changes ) {
+		stripped.write( JUNK, start, 'latin1' );
+		stripped.fill( 0, start + RIFF_CHUNK_HEADER_SIZE, end );
 	}
 	return stripped;
 }

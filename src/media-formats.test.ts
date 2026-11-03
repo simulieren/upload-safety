@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { checkBmp, checkIco, checkOgg, stripFlac, stripGif, stripMp3, stripWav } from './media-formats.js';
+import { checkBmp, checkIco, checkOgg, stripAac, stripFlac, stripGif, stripMp3, stripWav } from './media-formats.js';
 
 // The audio fixtures are made by ffmpeg from a 0.2 s sine with the title `SecretTitle` and the artist `TestArtist`.
 const fixture = ( name: string ) => readFileSync( new URL( `./__fixtures__/${ name }`, import.meta.url ) );
@@ -434,5 +434,76 @@ describe( 'Ogg', () => {
 		expect( checkOgg( version ) ).toBeNull();
 		expect( checkOgg( Buffer.alloc( 100, 0x41 ) ) ).toBeNull();
 		expect( checkOgg( Buffer.alloc( 0 ) ) ).toBeNull();
+	} );
+} );
+
+describe( 'AAC', () => {
+	// An ADTS frame: MPEG-4, no CRC, 44.1 kHz, `length` bytes with the 7 byte header included.
+	const frame = ( length: number, fill = 0x55 ) => {
+		const header = bytesOf( 0xff, 0xf1, 0x50, 0x80 | ( length >> 11 ), ( length >> 3 ) & 0xff, ( ( length & 7 ) << 5 ) | 0x1f, 0xfc );
+		return Buffer.concat( [ header, Buffer.alloc( Math.max( 0, length - 7 ), fill ) ] );
+	};
+	const FRAMES = Buffer.concat( [ frame( 20 ), frame( 30 ), frame( 25 ) ] );
+	const id3v2 = ( body: Buffer ) => Buffer.concat( [ text( 'ID3' ), bytesOf( 3, 0, 0, 0, 0, 0, body.length ), body ] );
+	const id3v1 = () => Buffer.concat( [ text( 'TAG' ), text( 'SecretTitle' ), Buffer.alloc( 125 - 11 ) ] );
+
+	it( 'drops ID3v2 and ID3v1 tags and keeps the frames', () => {
+		const file = Buffer.concat( [ id3v2( text( 'SecretTitle' ) ), FRAMES, id3v1() ] );
+
+		expect( stripAac( file ) ).toEqual( FRAMES );
+	} );
+
+	it( 'returns the same buffer when there are no tags', () => {
+		expect( stripAac( FRAMES ) ).toBe( FRAMES );
+	} );
+
+	it( 'accepts frames with a CRC', () => {
+		// protection_absent 0 makes the header 9 bytes, so a 16 byte frame has 7 bytes of payload.
+		const withCrc = Buffer.concat( [ bytesOf( 0xff, 0xf0, 0x50, 0x80, 0x02, 0x1f, 0xfc, 0, 0 ), Buffer.alloc( 7 ) ] );
+
+		expect( stripAac( withCrc ) ).toBe( withCrc );
+	} );
+
+	it( 'removes the tags from a real file and keeps every frame byte for byte', () => {
+		const input = fixture( 'media-tagged.aac' );
+		const output = stripAac( input )!;
+
+		expect( holdsMetadata( input ) ).toBe( true );
+		expect( output ).not.toBeNull();
+		expect( holdsMetadata( output ) ).toBe( false );
+		expect( input.subarray( input.length - output.length ).equals( output ) ).toBe( true );
+		expect( output.readUInt16BE( 0 ) & 0xfff0 ).toBe( 0xfff0 );
+		expect( stripAac( output ) ).toBe( output );
+	} );
+
+	it( 'rejects junk between frames and after the last frame', () => {
+		expect( stripAac( Buffer.concat( [ frame( 20 ), text( 'junk' ), frame( 30 ) ] ) ) ).toBeNull();
+		expect( stripAac( Buffer.concat( [ FRAMES, text( 'MZ-payload' ) ] ) ) ).toBeNull();
+	} );
+
+	it( 'rejects a truncated last frame', () => {
+		expect( stripAac( FRAMES.subarray( 0, FRAMES.length - 1 ) ) ).toBeNull();
+		expect( stripAac( fixture( 'media-tagged.aac' ).subarray( 0, 600 ) ) ).toBeNull();
+	} );
+
+	it( 'rejects bad headers: layer, sampling index, frame length and sync', () => {
+		const bad = ( index: number, value: number ) => {
+			const copy = Buffer.from( frame( 20 ) );
+			copy[ index ] = value;
+			return copy;
+		};
+
+		expect( stripAac( bad( 1, 0xf3 ) ) ).toBeNull();
+		expect( stripAac( bad( 2, 0x7c ) ) ).toBeNull();
+		expect( stripAac( bad( 0, 0xfe ) ) ).toBeNull();
+		expect( stripAac( frame( 6 ) ) ).toBeNull();
+		expect( stripAac( Buffer.concat( [ frame( 20 ), bytesOf( 0xff, 0xf1, 0x50, 0x80, 0x01, 0x1f, 0xfc ) ] ) ) ).toBeNull();
+	} );
+
+	it( 'rejects empty input, tags only and other audio', () => {
+		expect( stripAac( Buffer.alloc( 0 ) ) ).toBeNull();
+		expect( stripAac( id3v2( text( 'tag' ) ) ) ).toBeNull();
+		expect( stripAac( fixture( 'media-tagged.mp3' ) ) ).toBeNull();
+		expect( stripAac( fixture( 'media-tagged.wav' ) ) ).toBeNull();
 	} );
 } );

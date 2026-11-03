@@ -19,8 +19,8 @@ const CLEAN_DOCX = buildZip( { '[Content_Types].xml': '<Types/>', 'word/document
 
 describe( 'format risk', () => {
 	it( 'accepts only formats of low risk by default', () => {
-		expect( ALLOWED_EXTENSIONS ).toEqual( expect.arrayContaining( [ 'pdf', 'docx', 'jpg', 'gif', 'mp3', 'mp4', 'mov', 'webm' ] ) );
-		for ( const extension of [ 'md', 'rtf', 'zip', 'tar', 'gz', 'tgz', 'rar', '7z' ] as const ) {
+		expect( ALLOWED_EXTENSIONS ).toEqual( expect.arrayContaining( [ 'pdf', 'docx', 'jpg', 'gif', 'mp3', 'aac', 'mp4', 'mov', 'webm', 'mkv', 'avi' ] ) );
+		for ( const extension of [ 'md', 'rtf', 'wma', 'wmv', 'zip', 'tar', 'gz', 'tgz', 'rar', '7z' ] as const ) {
 			expect( ALLOWED_EXTENSIONS ).not.toContain( extension );
 			expect( check( `file.${ extension }`, new Uint8Array( 8 ) ) ).toEqual( { ok: false, reason: 'type-not-allowed' } );
 		}
@@ -28,7 +28,7 @@ describe( 'format risk', () => {
 	} );
 
 	it( 'rates each opt-in format', () => {
-		expect( [ 'md', 'rtf', 'zip', 'tar', 'gz', 'tgz' ].map( ( extension ) => FORMAT_RISK[ extension as AllowedExtension ] ) ).toEqual( Array( 6 ).fill( 'elevated' ) );
+		expect( [ 'md', 'rtf', 'wma', 'wmv', 'zip', 'tar', 'gz', 'tgz' ].map( ( extension ) => FORMAT_RISK[ extension as AllowedExtension ] ) ).toEqual( Array( 8 ).fill( 'elevated' ) );
 		expect( [ FORMAT_RISK.rar, FORMAT_RISK[ '7z' ] ] ).toEqual( [ 'unchecked', 'unchecked' ] );
 	} );
 } );
@@ -96,5 +96,21 @@ describe( 'audio and video', () => {
 		expect( result.ok ).toBe( true );
 		expect( check( 'song.mp3', fixture( 'media-tagged.flac' ) ) ).toEqual( { ok: false, reason: 'content-mismatch' } );
 		expect( check( 'clip.mp4', fixture( 'media-tagged.wav' ) ) ).toEqual( { ok: false, reason: 'content-mismatch' } );
+	} );
+
+	it( 'cleans MKV, AVI and AAC by default', () => {
+		for ( const [ name, file ] of [ [ 'clip.mkv', 'video-gps.mkv' ], [ 'clip.avi', 'video-gps.avi' ], [ 'song.aac', 'media-tagged.aac' ] ] ) {
+			const result = check( name, fixture( file ) );
+			expect( result.ok ).toBe( true );
+			expect( result.ok && Buffer.from( result.bytes ).includes( 'SecretTitle' ) ).toBe( false );
+		}
+	} );
+
+	it( 'takes WMA and WMV only when named, cleaned, and not one for the other', () => {
+		expect( check( 'clip.wmv', fixture( 'video-tagged.wmv' ) ) ).toEqual( { ok: false, reason: 'type-not-allowed' } );
+		const result = check( 'clip.wmv', fixture( 'video-tagged.wmv' ), [ 'wmv' ] );
+		expect( result.ok ).toBe( true );
+		expect( result.ok && Buffer.from( result.bytes ).includes( Buffer.from( 'SecretTitle', 'utf16le' ) ) ).toBe( false );
+		expect( check( 'song.wma', fixture( 'video-tagged.wmv' ), [ 'wma' ] ) ).toEqual( { ok: false, reason: 'content-mismatch' } );
 	} );
 } );

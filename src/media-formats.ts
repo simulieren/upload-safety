@@ -1,5 +1,5 @@
 /**
- * Checks and cleans GIF, BMP and ICO images and MP3, WAV, FLAC and Ogg audio without decoding
+ * Checks and cleans GIF, BMP and ICO images and MP3, AAC, WAV, FLAC and Ogg audio without decoding
  * them, in the way `photo-metadata.ts` handles photos: GIF blocks, WAV chunks and FLAC metadata
  * blocks are kept only when known, so comments, XMP and tags are dropped whole while the image
  * and audio data stay byte for byte. BMP, ICO and Ogg only get a structure check: BMP and ICO
@@ -71,6 +71,11 @@ const MPEG_SAMPLE_RATES: Record<number, number[]> = {
 	2: [ 22050, 24000, 16000 ],
 	0: [ 11025, 12000, 8000 ],
 };
+
+const ADTS_HEADER_SIZE = 7;
+const ADTS_HEADER_SIZE_WITH_CRC = 9;
+const ADTS_MAX_FRAMES = 10_000_000;
+const ADTS_SAMPLING_INDEXES = 13;
 
 const RIFF_HEADER_SIZE = 12;
 const RIFF_CHUNK_HEADER_SIZE = 8;
@@ -330,6 +335,45 @@ export function stripMp3( content: Buffer ): Buffer | null {
 		return null;
 	}
 	return slice( content, start, end );
+}
+
+/** The length of the ADTS frame whose header starts at `offset`, or 0 when it is not a valid header. */
+function adtsFrameLength( bytes: Buffer, offset: number ): number {
+	if ( offset + ADTS_HEADER_SIZE > bytes.length ) {
+		return 0;
+	}
+	const [ first, second, third ] = [ bytes[ offset ], bytes[ offset + 1 ], bytes[ offset + 2 ] ];
+	const layer = ( second >> 1 ) & 3;
+	const headerSize = second & 1 ? ADTS_HEADER_SIZE : ADTS_HEADER_SIZE_WITH_CRC;
+	const samplingIndex = ( third >> 2 ) & 0xf;
+	const length = ( ( bytes[ offset + 3 ] & 3 ) << 11 ) | ( bytes[ offset + 4 ] << 3 ) | ( bytes[ offset + 5 ] >> 5 );
+	if ( first !== 0xff || ( second & 0xf0 ) !== 0xf0 || layer !== 0 || samplingIndex >= ADTS_SAMPLING_INDEXES || length < headerSize ) {
+		return 0;
+	}
+	return length;
+}
+
+/**
+ * The raw ADTS AAC frames without ID3v2, ID3v1, APEv2 and Lyrics3 tags, or null when the audio is not a
+ * run of valid ADTS frames ending exactly at the end of the audio. Every frame header is walked, so nothing
+ * unchecked can sit between frames or after the last one.
+ */
+export function stripAac( content: Buffer ): Buffer | null {
+	const start = skipId3v2( content );
+	if ( start < 0 ) {
+		return null;
+	}
+	const end = findTrailingTags( content, start );
+	const audio = content.subarray( start, end );
+	let offset = 0;
+	for ( let frames = 0; offset < audio.length; frames++ ) {
+		const length = frames < ADTS_MAX_FRAMES ? adtsFrameLength( audio, offset ) : 0;
+		if ( length === 0 || offset + length > audio.length ) {
+			return null;
+		}
+		offset += length;
+	}
+	return audio.length > 0 ? slice( content, start, end ) : null;
 }
 
 function riffChunk( type: string, payload: Buffer ): Buffer {

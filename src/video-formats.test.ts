@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { stripIsoMedia, stripWebm } from './video-formats.js';
+import { stripAvi, stripIsoMedia, stripMatroska } from './video-formats.js';
 
 const GPS = '+47.2500+008.5000';
 const TITLE = 'SecretTitle';
@@ -191,11 +191,11 @@ const INFO = element( '1549a966', element( '4d80', text( 'Lavf' ) ) );
 const TRACKS = element( '1654ae6b', element( 'ae', element( 'd7', Buffer.from( [ 1 ] ) ) ) );
 const CLUSTER = element( '1f43b675', element( 'e7', Buffer.from( [ 0 ] ) ), element( 'a3', text( 'framedata' ) ) );
 
-describe( 'stripWebm', () => {
+describe( 'stripMatroska with webm', () => {
 	it( 'removes title and tags from a real file without changing its size or clusters', () => {
 		const input = fixture( 'video-gps.webm' );
 		const inputCopy = Buffer.from( input );
-		const output = stripWebm( input );
+		const output = stripMatroska( input, 'webm' );
 
 		expect( input.includes( TITLE ) ).toBe( true );
 		expect( output ).not.toBeNull();
@@ -205,7 +205,7 @@ describe( 'stripWebm', () => {
 		expect( output!.includes( 'SecretComment' ) ).toBe( false );
 		const clusterStart = input.indexOf( Buffer.from( '1f43b675', 'hex' ) );
 		expect( output!.subarray( clusterStart ).equals( input.subarray( clusterStart ) ) ).toBe( true );
-		expect( stripWebm( output! ) ).toBe( output );
+		expect( stripMatroska( output!, 'webm' ) ).toBe( output );
 	} );
 
 	it( 'replaces Tags, Attachments and Title with Void elements of the same length', () => {
@@ -213,7 +213,7 @@ describe( 'stripWebm', () => {
 		const attachments = element( '1941a469', element( '61a7', text( 'cover-image' ) ) );
 		const info = element( '1549a966', element( '7ba9', text( TITLE ) ), element( '4d80', text( 'Lavf' ) ) );
 		const file = webm( [ info, TRACKS, attachments, CLUSTER, tags ] );
-		const output = stripWebm( file )!;
+		const output = stripMatroska( file, 'webm' )!;
 
 		expect( output.length ).toBe( file.length );
 		for ( const secret of [ 'SecretTag', 'cover-image', TITLE ] ) {
@@ -221,14 +221,14 @@ describe( 'stripWebm', () => {
 		}
 		expect( output.includes( 'Lavf' ) ).toBe( true );
 		expect( output.includes( 'framedata' ) ).toBe( true );
-		expect( stripWebm( output ) ).toBe( output );
+		expect( stripMatroska( output, 'webm' ) ).toBe( output );
 	} );
 
 	it( 'fills large elements with a Void whose size field is wide enough', () => {
 		const attachments = element( '1941a469', Buffer.alloc( 100 ) );
 		const big = Buffer.concat( [ Buffer.from( '1941a469', 'hex' ), vint( 70_000, 4 ), Buffer.alloc( 70_000, 7 ) ] );
 		const file = webm( [ INFO, TRACKS, attachments, big, CLUSTER ] );
-		const output = stripWebm( file )!;
+		const output = stripMatroska( file, 'webm' )!;
 
 		expect( output.length ).toBe( file.length );
 		expect( output.includes( Buffer.alloc( 8, 7 ) ) ).toBe( false );
@@ -238,14 +238,14 @@ describe( 'stripWebm', () => {
 	it( 'accepts a segment of unknown size', () => {
 		const file = webm( [ INFO, TRACKS, CLUSTER ], 'webm', UNKNOWN_SIZE );
 
-		expect( stripWebm( file ) ).toBe( file );
+		expect( stripMatroska( file, 'webm' ) ).toBe( file );
 	} );
 
 	it( 'accepts clusters of unknown size, ending at the next top-level element', () => {
 		const live = Buffer.concat( [ Buffer.from( '1f43b675', 'hex' ), UNKNOWN_SIZE, element( 'e7', Buffer.from( [ 0 ] ) ), element( 'a3', text( 'framedata' ) ) ] );
 		const tags = element( '1254c367', element( '7373', text( 'SecretTag' ) ) );
 		const file = webm( [ INFO, TRACKS, live, live, tags ], 'webm', UNKNOWN_SIZE );
-		const output = stripWebm( file )!;
+		const output = stripMatroska( file, 'webm' )!;
 
 		expect( output ).not.toBeNull();
 		expect( output.includes( 'SecretTag' ) ).toBe( false );
@@ -255,17 +255,17 @@ describe( 'stripWebm', () => {
 	it( 'returns the same buffer when there is nothing to strip', () => {
 		const file = webm( [ INFO, TRACKS, CLUSTER ] );
 
-		expect( stripWebm( file ) ).toBe( file );
+		expect( stripMatroska( file, 'webm' ) ).toBe( file );
 	} );
 
-	it( 'rejects Matroska and other doc types', () => {
-		expect( stripWebm( webm( [ INFO, TRACKS, CLUSTER ], 'matroska' ) ) ).toBeNull();
-		expect( stripWebm( webm( [ INFO, TRACKS, CLUSTER ], 'mp4x' ) ) ).toBeNull();
+	it( 'rejects Matroska and other doc types when only WebM is allowed', () => {
+		expect( stripMatroska( webm( [ INFO, TRACKS, CLUSTER ], 'matroska' ), 'webm' ) ).toBeNull();
+		expect( stripMatroska( webm( [ INFO, TRACKS, CLUSTER ], 'mp4x' ), 'webm' ) ).toBeNull();
 	} );
 
 	it( 'rejects a file missing Info or Tracks', () => {
-		expect( stripWebm( webm( [ TRACKS, CLUSTER ] ) ) ).toBeNull();
-		expect( stripWebm( webm( [ INFO, CLUSTER ] ) ) ).toBeNull();
+		expect( stripMatroska( webm( [ TRACKS, CLUSTER ] ), 'webm' ) ).toBeNull();
+		expect( stripMatroska( webm( [ INFO, CLUSTER ] ), 'webm' ) ).toBeNull();
 	} );
 
 	it( 'rejects truncated files and elements running past the end', () => {
@@ -273,22 +273,190 @@ describe( 'stripWebm', () => {
 		const oversized = webm( [ INFO, TRACKS, CLUSTER ] );
 		oversized[ oversized.length - CLUSTER.length + 4 ] = 0xff - 1;
 
-		expect( stripWebm( file.subarray( 0, file.length - 5 ) ) ).toBeNull();
-		expect( stripWebm( file.subarray( 0, 3 ) ) ).toBeNull();
-		expect( stripWebm( Buffer.alloc( 0 ) ) ).toBeNull();
-		expect( stripWebm( oversized ) ).toBeNull();
+		expect( stripMatroska( file.subarray( 0, file.length - 5 ), 'webm' ) ).toBeNull();
+		expect( stripMatroska( file.subarray( 0, 3 ), 'webm' ) ).toBeNull();
+		expect( stripMatroska( Buffer.alloc( 0 ), 'webm' ) ).toBeNull();
+		expect( stripMatroska( oversized, 'webm' ) ).toBeNull();
 	} );
 
 	it( 'rejects data after a segment of known size and unknown-size elements other than clusters', () => {
 		const file = webm( [ INFO, TRACKS, CLUSTER ] );
 		const unknownInfo = webm( [ Buffer.from( '1549a966', 'hex' ), UNKNOWN_SIZE, TRACKS ] );
 
-		expect( stripWebm( Buffer.concat( [ file, text( 'trailing' ) ] ) ) ).toBeNull();
-		expect( stripWebm( unknownInfo ) ).toBeNull();
+		expect( stripMatroska( Buffer.concat( [ file, text( 'trailing' ) ] ), 'webm' ) ).toBeNull();
+		expect( stripMatroska( unknownInfo, 'webm' ) ).toBeNull();
 	} );
 
 	it( 'rejects non-WebM bytes', () => {
-		expect( stripWebm( fixture( 'video-gps.mp4' ) ) ).toBeNull();
-		expect( stripWebm( Buffer.alloc( 64 ) ) ).toBeNull();
+		expect( stripMatroska( fixture( 'video-gps.mp4' ), 'webm' ) ).toBeNull();
+		expect( stripMatroska( Buffer.alloc( 64 ), 'webm' ) ).toBeNull();
+	} );
+} );
+
+describe( 'stripMatroska with matroska', () => {
+	const ATTACHMENT_TYPE = '1941a469';
+	const executable = text( 'MZ\x90\x00SecretExecutable' );
+
+	it( 'removes title, tags and location from a real MKV without changing its size or clusters', () => {
+		const input = fixture( 'video-gps.mkv' );
+		const output = stripMatroska( input, 'matroska' )!;
+
+		expect( input.includes( TITLE ) && input.includes( GPS ) ).toBe( true );
+		expect( output ).not.toBeNull();
+		expect( output.length ).toBe( input.length );
+		for ( const secret of [ TITLE, 'TestArtist', GPS ] ) {
+			expect( output.includes( secret ) ).toBe( false );
+		}
+		const clusterStart = input.indexOf( Buffer.from( '1f43b675', 'hex' ) );
+		expect( output.subarray( clusterStart ).equals( input.subarray( clusterStart ) ) ).toBe( true );
+		expect( stripMatroska( output, 'matroska' ) ).toBe( output );
+	} );
+
+	it( 'voids an attachment holding an executable', () => {
+		const attachments = element( ATTACHMENT_TYPE, element( '61a7', element( '466e', text( 'run.exe' ) ), element( '465c', executable ) ) );
+		const file = webm( [ INFO, TRACKS, attachments, CLUSTER ], 'matroska' );
+		const output = stripMatroska( file, 'matroska' )!;
+
+		expect( output.length ).toBe( file.length );
+		expect( output.includes( 'MZ' ) ).toBe( false );
+		expect( output.includes( 'run.exe' ) ).toBe( false );
+		expect( output.includes( 'framedata' ) ).toBe( true );
+	} );
+
+	it( 'accepts a Matroska file only when Matroska is allowed', () => {
+		const file = webm( [ INFO, TRACKS, CLUSTER ], 'matroska' );
+
+		expect( stripMatroska( file, 'matroska' ) ).toBe( file );
+		expect( stripMatroska( file, 'webm' ) ).toBeNull();
+	} );
+
+	it( 'accepts a WebM file when Matroska is allowed, and refuses other doc types', () => {
+		const file = webm( [ INFO, TRACKS, CLUSTER ], 'webm' );
+
+		expect( stripMatroska( file, 'matroska' ) ).toBe( file );
+		expect( stripMatroska( webm( [ INFO, TRACKS, CLUSTER ], 'mp4x' ), 'matroska' ) ).toBeNull();
+	} );
+
+	it( 'rejects truncated files and non-Matroska bytes', () => {
+		const file = fixture( 'video-gps.mkv' );
+
+		expect( stripMatroska( file.subarray( 0, file.length - 5 ), 'matroska' ) ).toBeNull();
+		expect( stripMatroska( fixture( 'video-gps.mp4' ), 'matroska' ) ).toBeNull();
+	} );
+} );
+
+const u32 = ( value: number ): Buffer => {
+	const buffer = Buffer.alloc( 4 );
+	buffer.writeUInt32LE( value );
+	return buffer;
+};
+
+function riffChunk( type: string, ...content: Buffer[] ): Buffer {
+	const body = Buffer.concat( content );
+	return Buffer.concat( [ text( type ), u32( body.length ), body, Buffer.alloc( body.length & 1 ) ] );
+}
+
+function riffList( listType: string, ...content: Buffer[] ): Buffer {
+	return riffChunk( 'LIST', text( listType ), ...content );
+}
+
+function avi( children: Buffer[], form = 'AVI ' ): Buffer {
+	const body = Buffer.concat( [ text( form ), ...children ] );
+	return Buffer.concat( [ text( 'RIFF' ), u32( body.length ), body ] );
+}
+
+const AVIH = riffChunk( 'avih', Buffer.alloc( 56, 1 ) );
+const HDRL = riffList( 'hdrl', AVIH );
+const MOVI = riffList( 'movi', riffChunk( '00dc', text( 'framedata' ) ) );
+const IDX1 = riffChunk( 'idx1', Buffer.alloc( 16, 2 ) );
+
+describe( 'stripAvi', () => {
+	it( 'removes title and artist from a real file without changing its size, movi or index', () => {
+		const input = fixture( 'video-gps.avi' );
+		const output = stripAvi( input )!;
+
+		expect( input.includes( TITLE ) ).toBe( true );
+		expect( output ).not.toBeNull();
+		expect( output.length ).toBe( input.length );
+		expect( output.includes( TITLE ) ).toBe( false );
+		expect( output.includes( 'TestArtist' ) ).toBe( false );
+		const moviStart = input.indexOf( text( 'movi' ) ) - 8;
+		expect( output.subarray( moviStart ).equals( input.subarray( moviStart ) ) ).toBe( true );
+		expect( stripAvi( output ) ).toBe( output );
+	} );
+
+	it( 'blanks INFO, IDIT, ISMP, XMP and vendor data into JUNK chunks of the same size', () => {
+		const info = riffList( 'INFO', riffChunk( 'INAM', text( 'SecretName' ) ) );
+		const strl = riffList( 'strl', riffChunk( 'strh', Buffer.alloc( 8, 3 ) ), riffChunk( 'strd', text( 'SecretSerial' ) ) );
+		const file = avi( [ riffList( 'hdrl', AVIH, strl ), info, riffChunk( 'IDIT', text( 'SecretDate' ) ), riffChunk( 'ISMP', text( 'SecretTime' ) ), riffChunk( '_PMX', text( '<x:xmpmeta>SecretXmp' ) ), MOVI, IDX1 ] );
+		const output = stripAvi( file )!;
+
+		expect( output.length ).toBe( file.length );
+		expect( output.includes( 'Secret' ) ).toBe( false );
+		expect( output.includes( 'INFO' ) ).toBe( false );
+		expect( output.includes( 'strh' ) ).toBe( true );
+		expect( output.subarray( output.length - MOVI.length - IDX1.length ).equals( Buffer.concat( [ MOVI, IDX1 ] ) ) ).toBe( true );
+		expect( stripAvi( output ) ).toBe( output );
+	} );
+
+	it( 'returns the same buffer when there is nothing to strip', () => {
+		const file = avi( [ HDRL, MOVI, IDX1 ] );
+
+		expect( stripAvi( file ) ).toBe( file );
+	} );
+
+	it( 'zeroes data hidden in JUNK chunks', () => {
+		const file = avi( [ HDRL, riffChunk( 'JUNK', text( 'SecretPadding' ) ), MOVI ] );
+
+		expect( stripAvi( file )!.includes( 'Secret' ) ).toBe( false );
+	} );
+
+	it( 'reads OpenDML RIFF AVIX chunks after the first and blanks metadata in them', () => {
+		const extension = avi( [ riffChunk( '_PMX', text( 'SecretXmp' ) ), MOVI ], 'AVIX' );
+		const file = Buffer.concat( [ avi( [ HDRL, MOVI ] ), extension ] );
+		const output = stripAvi( file )!;
+
+		expect( output.length ).toBe( file.length );
+		expect( output.includes( 'SecretXmp' ) ).toBe( false );
+		expect( stripAvi( Buffer.concat( [ avi( [ HDRL, MOVI ] ), avi( [ MOVI ] ) ] ) ) ).toBeNull();
+	} );
+
+	it( 'rejects an AVI without movi, hdrl or avih', () => {
+		expect( stripAvi( avi( [ HDRL, IDX1 ] ) ) ).toBeNull();
+		expect( stripAvi( avi( [ MOVI ] ) ) ).toBeNull();
+		expect( stripAvi( avi( [ riffList( 'hdrl', riffChunk( 'strh', Buffer.alloc( 8 ) ) ), MOVI ] ) ) ).toBeNull();
+		expect( stripAvi( avi( [ AVIH, MOVI ] ) ) ).toBeNull();
+	} );
+
+	it( 'rejects a chunk running past the end and a RIFF size larger than the file', () => {
+		const file = avi( [ HDRL, MOVI ] );
+		const longChunk = Buffer.from( file );
+		longChunk.writeUInt32LE( 10_000, file.length - MOVI.length + 4 );
+
+		expect( stripAvi( longChunk ) ).toBeNull();
+		expect( stripAvi( file.subarray( 0, file.length - 3 ) ) ).toBeNull();
+	} );
+
+	it( 'rejects bytes after the last RIFF', () => {
+		const file = avi( [ HDRL, MOVI ] );
+
+		expect( stripAvi( Buffer.concat( [ file, text( 'trailing' ) ] ) ) ).toBeNull();
+		expect( stripAvi( Buffer.concat( [ file, text( 'RIFF' ) ] ) ) ).toBeNull();
+	} );
+
+	it( 'rejects lists nested deeper than the limit', () => {
+		let nested = riffChunk( '_PMX', text( 'x' ) );
+		for ( let level = 0; level < 12; level++ ) {
+			nested = riffList( 'strl', nested );
+		}
+
+		expect( stripAvi( avi( [ riffList( 'hdrl', AVIH, nested ), MOVI ] ) ) ).toBeNull();
+	} );
+
+	it( 'rejects other RIFF forms and non-RIFF bytes', () => {
+		expect( stripAvi( avi( [ HDRL, MOVI ], 'WAVE' ) ) ).toBeNull();
+		expect( stripAvi( fixture( 'media-tagged.wav' ) ) ).toBeNull();
+		expect( stripAvi( Buffer.alloc( 0 ) ) ).toBeNull();
+		expect( stripAvi( Buffer.alloc( 64 ) ) ).toBeNull();
 	} );
 } );

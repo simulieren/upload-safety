@@ -48,7 +48,7 @@ Every check fails closed: a part it cannot read is a refusal, not a pass.
 - **Zero runtime dependencies.** Only `node:zlib` and `node:crypto`. Nothing to audit but this package.
 - **Typed reasons.** Each refusal is one of seven string literals, so a `Record<UploadRejection, string>` of messages is checked by the compiler.
 - **Fast enough to run inline.** Synchronous; 647 real documents up to 20 MB each took at most 65 ms on a laptop.
-- **Tested against crafted files.** 372 tests build malformed ZIPs, tars, compound files, PDFs, RTF and media files byte by byte, next to real Office, PDF, photo, audio and video files.
+- **Tested against crafted files.** 422 tests build malformed ZIPs, tars, compound files, PDFs, RTF and media files byte by byte, next to real Office, PDF, photo, audio and video files.
 
 Full documentation, with a page per format: **[upload-safety.simonhalimonov.com](https://upload-safety.simonhalimonov.com)**.
 
@@ -143,8 +143,9 @@ app.post( '/upload', upload.single( 'file' ), ( req, res ) => {
 | Photos | `jpg` `jpeg` `png` `webp` | Structure; EXIF (GPS included), XMP, IPTC, comments and any other metadata segment or chunk are removed, the orientation is kept |
 | HEIF photos | `heic` `heif` `avif` | Brands; EXIF and XMP items are overwritten in place, since dropping them would shift the offsets the file is built on. The orientation lives in the image properties and stays. Image sequences, such as animated AVIF, are refused |
 | Other images | `gif` `bmp` `ico` | GIF: comments, XMP and other application extensions removed, anything after the end cut off. BMP and ICO: headers |
-| Audio | `mp3` `wav` `flac` `ogg` `m4a` | Frame and chunk structure; ID3, APE, RIFF INFO, Vorbis comment and picture blocks and iTunes tags removed. Ogg pages are checked by their CRC, their comments stay |
-| Video | `mp4` `mov` `webm` | Box or element structure; `udta`, `meta`, XMP and `uuid` boxes (iPhone location included), WebM tags, attachments and title blanked in place, so no offset moves |
+| Audio | `mp3` `aac` `wav` `flac` `ogg` `m4a` | Frame and chunk structure (every AAC frame); ID3, APE, RIFF INFO, Vorbis comment and picture blocks and iTunes tags removed. Ogg pages are checked by their CRC, their comments stay |
+| Video | `mp4` `mov` `webm` `mkv` `avi` | Box, element or chunk structure; `udta`, `meta`, XMP and `uuid` boxes (iPhone location included), Matroska tags, attachments and title, AVI INFO, XMP and vendor chunks blanked in place, so no offset moves |
+| Windows Media | `wma` `wmv` | ASF object structure and the stream type; title, author and tag objects blanked in place. Script commands, which make Windows Media Player open URLs, are refused as `macros`; DRM and signatures, which carry license URLs it opens, as `encrypted`. Opt-in |
 | Text | `csv` `txt` | No binary data (UTF-8, UTF-16 with a byte order mark, or a Windows code page); in CSV no cell that starts like a formula (`=`, `+`, `-`, `@`) and calls a function or DDE. Numbers such as `-5` or `+49 (30) 1234` pass |
 | Markdown | `md` | As text. Opt-in |
 | RTF | `rtf` | Refused on any embedded or linked object (`\obj…`), attached template, data store, or DDE field, however it is spelled. Opt-in |
@@ -160,7 +161,7 @@ Each format has a risk level in `FORMAT_RISK`. Only `low` formats are in the def
 | Risk | Formats | Why |
 | - | - | - |
 | `low` | documents, photos and other images, audio, video, `csv`, `txt` | Read in full; nothing in them runs once the checks pass |
-| `elevated` | `md`, `rtf`, `zip`, `tar`, `gz`, `tgz` | Read in full, but RTF is a common malware carrier whose reader in Word is lenient, Markdown becomes HTML when rendered, and archives get unpacked, and their files keep their metadata |
+| `elevated` | `md`, `rtf`, `wma`, `wmv`, `zip`, `tar`, `gz`, `tgz` | Read in full, but RTF is a common malware carrier whose reader in Word is lenient, Windows Media files are opened by a player with a history of exploits through them, Markdown becomes HTML when rendered, and archives get unpacked, and their files keep their metadata |
 | `unchecked` | `rar`, `7z` | Reading them needs a decompressor this package does not have, so anything can be inside. Serve them only as downloads, ideally after a virus scan |
 
 ```ts

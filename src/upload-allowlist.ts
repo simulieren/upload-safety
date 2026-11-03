@@ -6,6 +6,7 @@
  */
 
 import { inspectGzip, inspectTarArchive, inspectZipArchive } from './archive-content.js';
+import { inspectAsf } from './asf-media.js';
 import { inspectExcelGlobals } from './excel-macro-sheets.js';
 import { readFtypBrands } from './heif-metadata.js';
 import { readOleDirectory, type OleDirectory } from './ole-streams.js';
@@ -20,7 +21,7 @@ import { readZipEntries, readZipEntryData, startsWithBytes, type ZipEntry } from
 export type AllowedExtension =
 	| 'pdf' | 'doc' | 'docx' | 'ppt' | 'pptx' | 'xls' | 'xlsx' | 'odt' | 'ods' | 'odp'
 	| 'jpg' | 'jpeg' | 'png' | 'webp' | 'heic' | 'heif' | 'avif' | 'gif' | 'bmp' | 'ico'
-	| 'mp3' | 'wav' | 'flac' | 'ogg' | 'm4a' | 'mp4' | 'mov' | 'webm'
+	| 'mp3' | 'aac' | 'wav' | 'flac' | 'ogg' | 'm4a' | 'wma' | 'mp4' | 'mov' | 'webm' | 'mkv' | 'avi' | 'wmv'
 	| 'csv' | 'txt' | 'md' | 'rtf' | 'zip' | 'tar' | 'gz' | 'tgz' | 'rar' | '7z';
 
 /**
@@ -35,7 +36,7 @@ export type FormatRisk = 'low' | 'elevated' | 'unchecked';
 /** Magic-byte family an extension's bytes must match; text has no signature and is checked on its own. */
 type MagicFamily =
 	| 'pdf' | 'zip' | 'ole' | 'jpeg' | 'png' | 'webp' | 'isobmff' | 'text' | 'gif' | 'bmp' | 'ico'
-	| 'mp3' | 'wav' | 'flac' | 'ogg' | 'quicktime' | 'webm' | 'rtf' | 'tar' | 'gzip' | 'rar' | '7z';
+	| 'mp3' | 'aac' | 'wav' | 'flac' | 'ogg' | 'quicktime' | 'webm' | 'avi' | 'asf' | 'rtf' | 'tar' | 'gzip' | 'rar' | '7z';
 
 interface AllowedType {
 	extension: AllowedExtension;
@@ -446,6 +447,12 @@ const ALLOWED_TYPES: readonly AllowedType[] = [
 	// Old QuickTime movies have no `ftyp`; the structure is checked when the metadata is removed.
 	{ extension: 'mov', risk: 'low', magic: 'quicktime', mimeTypes: [ 'video/quicktime' ] },
 	{ extension: 'webm', risk: 'low', magic: 'webm', mimeTypes: [ 'video/webm', 'audio/webm' ] },
+	{ extension: 'aac', risk: 'low', magic: 'aac', mimeTypes: [ 'audio/aac', 'audio/x-aac', 'audio/aacp' ] },
+	{ extension: 'mkv', risk: 'low', magic: 'webm', mimeTypes: [ 'video/x-matroska', 'video/matroska', 'audio/x-matroska' ] },
+	{ extension: 'avi', risk: 'low', magic: 'avi', mimeTypes: [ 'video/x-msvideo', 'video/avi', 'video/msvideo' ] },
+	// Windows Media Player runs script commands and opens DRM license URLs in these; both are refused.
+	{ extension: 'wma', risk: 'elevated', magic: 'asf', mimeTypes: [ 'audio/x-ms-wma', 'application/vnd.ms-asf' ] },
+	{ extension: 'wmv', risk: 'elevated', magic: 'asf', mimeTypes: [ 'video/x-ms-wmv', 'video/x-ms-asf', 'application/vnd.ms-asf' ] },
 	// Rendered Markdown may carry raw HTML and `javascript:` links; the file itself is checked as text.
 	{ extension: 'md', risk: 'elevated', magic: 'text', mimeTypes: [ 'text/markdown', 'text/x-markdown', 'text/plain' ] },
 	// A common carrier of OLE exploits; refused on any object, template or DDE field.
@@ -631,6 +638,13 @@ const MAGIC_SIGNATURES: Record<MagicFamily, ( bytes: Uint8Array ) => boolean> = 
 	// "RIFF", the size, "WAVE"
 	wav: ( bytes ) => startsWith( bytes, [ 0x52, 0x49, 0x46, 0x46 ] ) && bytes.length >= 12 &&
 		startsWith( bytes.subarray( 8 ), [ 0x57, 0x41, 0x56, 0x45 ] ),
+	// An ID3 tag or an ADTS frame sync (12 bits set, MPEG layer 0)
+	aac: ( bytes ) => startsWith( bytes, [ 0x49, 0x44, 0x33 ] ) || ( bytes.length >= 2 && bytes[ 0 ] === 0xff && ( bytes[ 1 ] & 0xf6 ) === 0xf0 ),
+	// "RIFF", the size, "AVI "
+	avi: ( bytes ) => startsWith( bytes, [ 0x52, 0x49, 0x46, 0x46 ] ) && bytes.length >= 12 &&
+		startsWith( bytes.subarray( 8 ), [ 0x41, 0x56, 0x49, 0x20 ] ),
+	// The ASF Header Object GUID
+	asf: ( bytes ) => startsWith( bytes, [ 0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c ] ),
 	// "fLaC"
 	flac: ( bytes ) => startsWith( bytes, [ 0x66, 0x4c, 0x61, 0x43 ] ),
 	// "OggS"
@@ -702,6 +716,9 @@ export function inspectFileContent(
 	}
 	if ( allowed.magic === 'text' ) {
 		return inspectText( content, allowed.extension === 'csv' );
+	}
+	if ( allowed.magic === 'asf' ) {
+		return inspectAsf( content, allowed.extension === 'wmv' ).verdict;
 	}
 	if ( allowed.magic === 'rtf' ) {
 		return inspectRtf( content );

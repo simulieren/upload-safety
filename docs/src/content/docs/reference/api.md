@@ -101,7 +101,7 @@ Whether a PDF needs a password to open.
 
 | Export | Value |
 | - | - |
-| `AllowedExtension` | Every supported extension: the documents, `jpg` `jpeg` `png` `webp` `heic` `heif` `avif` `gif` `bmp` `ico`, `mp3` `wav` `flac` `ogg` `m4a` `mp4` `mov` `webm`, `csv` `txt` `md` `rtf`, `zip` `tar` `gz` `tgz` `rar` `7z` |
+| `AllowedExtension` | Every supported extension: the documents, `jpg` `jpeg` `png` `webp` `heic` `heif` `avif` `gif` `bmp` `ico`, `mp3` `aac` `wav` `flac` `ogg` `m4a` `wma` `mp4` `mov` `webm` `mkv` `avi` `wmv`, `csv` `txt` `md` `rtf`, `zip` `tar` `gz` `tgz` `rar` `7z` |
 | `ALLOWED_EXTENSIONS` | The default list: every extension of `low` risk |
 | `FORMAT_RISK` | `Record<AllowedExtension, 'low' \| 'elevated' \| 'unchecked'>`, see [Choosing formats](/formats/risk/) |
 | `FormatRisk` | `'low' \| 'elevated' \| 'unchecked'` |

@@ -9,13 +9,15 @@ Every format has a risk level, exported as `FORMAT_RISK`. Only `low` formats are
 
 | Risk | Formats | What it means |
 | - | - | - |
-| `low` | `pdf`, `doc` `docx`, `xls` `xlsx`, `ppt` `pptx`, `odt` `ods` `odp`, `jpg` `jpeg` `png` `webp` `heic` `heif` `avif` `gif` `bmp` `ico`, `mp3` `wav` `flac` `ogg` `m4a`, `mp4` `mov` `webm`, `csv` `txt` | Read in full. Nothing in them runs once the checks pass. |
-| `elevated` | `md`, `rtf`, `zip` `tar` `gz` `tgz` | Read in full, but each carries a risk the checks cannot remove. |
+| `low` | `pdf`, `doc` `docx`, `xls` `xlsx`, `ppt` `pptx`, `odt` `ods` `odp`, `jpg` `jpeg` `png` `webp` `heic` `heif` `avif` `gif` `bmp` `ico`, `mp3` `aac` `wav` `flac` `ogg` `m4a`, `mp4` `mov` `webm` `mkv` `avi`, `csv` `txt` | Read in full. Nothing in them runs once the checks pass. |
+| `elevated` | `md`, `rtf`, `wma` `wmv`, `zip` `tar` `gz` `tgz` | Read in full, but each carries a risk the checks cannot remove. |
 | `unchecked` | `rar`, `7z` | Only the signature is checked. Anything can be inside. |
 
 ## Why the elevated formats are elevated
 
 **RTF** is one of the most common ways malware reaches Office users, through embedded OLE objects such as Equation Editor exploits. upload-safety refuses any object, attached template, data store and DDE field. Word's RTF reader is lenient, though, so a spelling it accepts and this check does not know stays possible. See [RTF](/formats/rtf/).
+
+**WMA and WMV** use Microsoft's ASF container, which Windows Media Player opens, not browsers. Script commands in it make the player open URLs, and DRM objects carry license URLs it opens, which malware has used. Both are refused. What stays is a container read by a player with a long history of exploits. See [Audio and video](/formats/audio-and-video/).
 
 **Markdown** is plain text, and is checked as such. The risk is in rendering it: raw HTML and `javascript:` links become part of your page. Sanitize the HTML you render, or offer the file only as a download.
 
