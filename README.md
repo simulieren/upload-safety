@@ -7,7 +7,7 @@
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![types](https://img.shields.io/badge/types-TypeScript-3178c6)](src/index.ts)
 
-Server-side upload checks for Node that read the file, not just its name. An upload passes only when its extension, its declared MIME type and its bytes agree, and when it carries nothing that runs on its own: no macros, embedded objects, DDE fields or PDF scripts. Photos lose their GPS position and other metadata on the way through.
+Server-side upload checks for Node that read the file, not just its name. An upload passes only when its extension, its declared MIME type and its bytes agree, and when it carries nothing that runs on its own: no macros, embedded objects, DDE fields, PDF scripts or CSV formulas. Photos, including iPhone HEIC, lose their GPS position and other metadata on the way through.
 
 For apps that take CVs, invoices, contracts and photos from strangers and hand them to colleagues who open them in Office or Acrobat.
 
@@ -30,9 +30,11 @@ if ( ! result.ok ) {
 | `form.pdf` with JavaScript, a launch action or an attachment, also in compressed object streams | refused, `macros` |
 | `budget.xls` with a very hidden Excel 4.0 macro sheet | refused, `macros` |
 | `notes.odt` with a Basic macro or an event listener | refused, `macros` |
+| `export.csv` with `=HYPERLINK(...)` or `=cmd\|' /C calc'!A0` in a cell | refused, `macros` |
 | `contract.docx` saved with a password | refused, `encrypted` |
 | `data.xlsx` that is a zip bomb | refused, `content-mismatch` |
 | `holiday.jpg` with GPS coordinates | accepted, EXIF, XMP, IPTC and comments removed, orientation kept |
+| `IMG_0042.heic` from an iPhone | accepted, EXIF and XMP overwritten in place, pixels unchanged |
 | `../../CON.pdf`, a plain PDF | accepted, stored as `_CON.pdf` |
 
 Every check fails closed: a part it cannot read is a refusal, not a pass.
@@ -42,7 +44,7 @@ Every check fails closed: a part it cannot read is a refusal, not a pass.
 - **Zero runtime dependencies.** Only `node:zlib` and `node:crypto`. Nothing to audit but this package.
 - **Typed reasons.** Each refusal is one of seven string literals, so a `Record<UploadRejection, string>` of messages is checked by the compiler.
 - **Fast enough to run inline.** Synchronous; 647 real documents up to 20 MB each took at most 65 ms on a laptop.
-- **Tested against crafted files.** 213 tests build malformed ZIPs, compound files and PDFs byte by byte, next to real Office and PDF files.
+- **Tested against crafted files.** 235 tests build malformed ZIPs, compound files and PDFs byte by byte, next to real Office and PDF files.
 
 ## Install
 
@@ -132,9 +134,11 @@ app.post( '/upload', upload.single( 'file' ), ( req, res ) => {
 | Office (OOXML) | `docx` `xlsx` `pptx` | Required parts; VBA and ActiveX parts; macro content types and relationships; embedded and linked OLE objects; altChunk imports; subdocuments, frames and remote templates; DDE fields in Word and DDE links in Excel; encryption |
 | Office (legacy) | `doc` `xls` `ppt` | OLE directory; VBA storages; embedded OLE objects; Excel 4.0 macro sheets; DDE and OLE links in Excel; PowerPoint VBA and object records; encryption flags |
 | OpenDocument | `odt` `ods` `odp` | The `mimetype` entry; Basic and script modules; embedded OLE objects; event listeners; links to macros; encrypted manifests |
-| Photos | `jpg` `jpeg` `png` | Structure; EXIF (GPS included), XMP, IPTC and comments are removed, the orientation is kept |
+| Photos | `jpg` `jpeg` `png` `webp` | Structure; EXIF (GPS included), XMP, IPTC, comments and any other metadata segment or chunk are removed, the orientation is kept |
+| HEIF photos | `heic` `heif` `avif` | Brands; EXIF and XMP items are overwritten in place, since dropping them would shift the offsets the file is built on. The orientation lives in the image properties and stays. Image sequences, such as animated AVIF, are refused |
+| Text | `csv` `txt` | No binary data (UTF-8, UTF-16 with a byte order mark, or a Windows code page); in CSV no cell that starts like a formula (`=`, `+`, `-`, `@`) and calls a function or DDE. Numbers such as `-5` or `+49 (30) 1234` pass |
 
-ZIP and OLE reading is capped against zip bombs and malformed sector chains. A PDF that asks for a password is refused. One that only restricts permissions opens without a password and passes, unless its object streams are encrypted, since then they cannot be checked.
+ZIP and OLE reading is capped against zip bombs and malformed sector chains. Every format is in the default list; pass `allowedExtensions` to accept fewer. A PDF that asks for a password is refused. One that only restricts permissions opens without a password and passes, unless its object streams are encrypted, since then they cannot be checked.
 
 ## API
 

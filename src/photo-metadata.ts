@@ -1,11 +1,14 @@
 /**
  * Removes what a photo tells about where, when and with what it was taken (EXIF with GPS,
- * XMP, IPTC, comments) without decoding it: JPEG segments and PNG chunks are dropped whole,
- * so the image data stays byte for byte. Only the orientation is written back, since without
- * it a portrait photo from a phone opens on its side.
+ * XMP, IPTC, comments) without decoding it: JPEG segments and PNG and WebP chunks are dropped
+ * whole, so the image data stays byte for byte. Only the orientation is written back, since
+ * without it a portrait photo from a phone opens on its side. HEIF images are handled in
+ * `heif-metadata.ts`.
  */
 
 import { crc32 } from 'node:zlib';
+
+import { stripHeif } from './heif-metadata.js';
 
 import type { AllowedExtension } from './upload-allowlist.js';
 
@@ -38,6 +41,15 @@ const PNG_IMAGE_CHUNKS = new Set( [
 	'IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'cHRM', 'gAMA', 'iCCP', 'sBIT', 'sRGB', 'cICP', 'mDCV', 'cLLI',
 	'bKGD', 'hIST', 'pHYs', 'sPLT', 'acTL', 'fcTL', 'fdAT',
 ] );
+
+const WEBP_HEADER_SIZE = 12;
+const RIFF_CHUNK_HEADER_SIZE = 8;
+// The chunks that draw the image, as for PNG; EXIF, XMP and any other chunk may carry metadata.
+const WEBP_IMAGE_CHUNKS = new Set( [ 'VP8X', 'VP8 ', 'VP8L', 'ALPH', 'ANIM', 'ANMF', 'ICCP' ] );
+const WEBP_BITSTREAM_CHUNKS = new Set( [ 'VP8 ', 'VP8L', 'ANMF' ] );
+/** VP8X flags of the metadata chunks, in the first byte of its payload. */
+const VP8X_EXIF = 0x08;
+const VP8X_XMP = 0x04;
 
 /** The orientation (1 to 8) in IFD0 of a TIFF block, or undefined when there is none or it does not read. */
 function readOrientation( tiff: Buffer ): number | undefined {
@@ -223,8 +235,74 @@ function stripPng( bytes: Buffer ): Buffer | null {
 	return null;
 }
 
+function riffChunk( type: string, payload: Buffer ): Buffer {
+	const chunk = Buffer.alloc( RIFF_CHUNK_HEADER_SIZE + payload.length + ( payload.length & 1 ) );
+	chunk.write( type, 0, 'latin1' );
+	chunk.writeUInt32LE( payload.length, 4 );
+	payload.copy( chunk, RIFF_CHUNK_HEADER_SIZE );
+	return chunk;
+}
+
 /**
- * The bytes to store for an upload: a JPEG or PNG without its metadata, any other file
+ * The WebP without metadata chunks, or null when its chunks do not read or none draws the image.
+ * Bytes after the RIFF size are cut off. The orientation needs the extended format (VP8X) to be
+ * written back, as a simple WebP cannot hold EXIF at all.
+ */
+function stripWebp( bytes: Buffer ): Buffer | null {
+	if ( bytes.length < WEBP_HEADER_SIZE || bytes.toString( 'latin1', 0, 4 ) !== 'RIFF' || bytes.toString( 'latin1', 8, 12 ) !== 'WEBP' ) {
+		return null;
+	}
+	const end = RIFF_CHUNK_HEADER_SIZE + bytes.readUInt32LE( 4 );
+	if ( end > bytes.length ) {
+		return null;
+	}
+	const chunks: Buffer[] = [];
+	let extended: { index: number; flags: Buffer } | undefined;
+	let orientation: number | undefined;
+	let drawn = false;
+	for ( let offset = WEBP_HEADER_SIZE; offset < end; ) {
+		const dataStart = offset + RIFF_CHUNK_HEADER_SIZE;
+		const dataEnd = dataStart + ( dataStart <= end ? bytes.readUInt32LE( offset + 4 ) : 0 );
+		if ( dataStart > end || dataEnd > end ) {
+			return null;
+		}
+		const type = bytes.toString( 'latin1', offset, offset + 4 );
+		const payload = bytes.subarray( dataStart, dataEnd );
+		if ( type === 'EXIF' ) {
+			// The format wants the TIFF block alone; some writers put the JPEG `Exif` header first.
+			orientation ??= readOrientation( payload.subarray( 0, EXIF_HEADER.length ).equals( EXIF_HEADER ) ? payload.subarray( EXIF_HEADER.length ) : payload );
+		}
+		if ( WEBP_IMAGE_CHUNKS.has( type ) ) {
+			if ( type === 'VP8X' ) {
+				extended ??= { index: chunks.length, flags: Buffer.from( payload ) };
+			}
+			chunks.push( riffChunk( type, payload ) );
+			drawn ||= WEBP_BITSTREAM_CHUNKS.has( type );
+		}
+		offset = dataEnd + ( ( dataEnd - dataStart ) & 1 );
+	}
+	if ( ! drawn ) {
+		return null;
+	}
+	if ( extended?.flags.length ) {
+		const { index, flags } = extended;
+		const writesOrientation = orientation !== undefined && orientation !== UPRIGHT;
+		flags[ 0 ] = ( flags[ 0 ] & ~( VP8X_EXIF | VP8X_XMP ) ) | ( writesOrientation ? VP8X_EXIF : 0 );
+		chunks[ index ] = riffChunk( 'VP8X', flags );
+		if ( writesOrientation ) {
+			// EXIF goes after the image data.
+			chunks.push( riffChunk( 'EXIF', orientationTiff( orientation! ) ) );
+		}
+	}
+	const header = Buffer.alloc( WEBP_HEADER_SIZE );
+	header.write( 'RIFF', 0, 'latin1' );
+	header.writeUInt32LE( 4 + chunks.reduce( ( sum, chunk ) => sum + chunk.length, 0 ), 4 );
+	header.write( 'WEBP', 8, 'latin1' );
+	return Buffer.concat( [ header, ...chunks ] );
+}
+
+/**
+ * The bytes to store for an upload: a photo without its metadata, any other file
  * unchanged; null for a photo whose structure does not read.
  */
 export function stripPhotoMetadata( extension: AllowedExtension, bytes: Uint8Array ): Uint8Array | null {
@@ -235,6 +313,12 @@ export function stripPhotoMetadata( extension: AllowedExtension, bytes: Uint8Arr
 			return stripJpeg( content );
 		case 'png':
 			return stripPng( content );
+		case 'webp':
+			return stripWebp( content );
+		case 'heic':
+		case 'heif':
+		case 'avif':
+			return stripHeif( content );
 		default:
 			return bytes;
 	}

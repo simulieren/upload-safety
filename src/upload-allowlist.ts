@@ -1,23 +1,26 @@
 /**
  * Strict allowlist + validation for document uploads: PDF, MS Office (also the
- * legacy formats), LibreOffice, and JPG/PNG. Validation happens on three axes: file
+ * legacy formats), LibreOffice, photos (JPEG, PNG, WebP, HEIC/HEIF, AVIF) and CSV and text. Validation happens on three axes: file
  * extension, declared MIME type, and the actual content, i.e. the magic-byte
  * signature plus the parts a file of that kind always has. Extension and MIME
  * alone are trivially spoofed.
  */
 
 import { inspectExcelGlobals } from './excel-macro-sheets.js';
+import { readFtypBrands } from './heif-metadata.js';
 import { readOleDirectory, type OleDirectory } from './ole-streams.js';
 import { inspectPdf } from './pdf-active-content.js';
 import { hasPowerPointCode, isEncryptedPowerPoint } from './powerpoint-vba.js';
+import { inspectText } from './text-content.js';
 import { stripXmlMarkup } from './xml-markup.js';
 import { readZipEntries, readZipEntryData, startsWithBytes, type ZipEntry } from './zip-entries.js';
 
 export type AllowedExtension =
-	| 'pdf' | 'doc' | 'docx' | 'ppt' | 'pptx' | 'xls' | 'xlsx' | 'odt' | 'ods' | 'odp' | 'jpg' | 'jpeg' | 'png';
+	| 'pdf' | 'doc' | 'docx' | 'ppt' | 'pptx' | 'xls' | 'xlsx' | 'odt' | 'ods' | 'odp'
+	| 'jpg' | 'jpeg' | 'png' | 'webp' | 'heic' | 'heif' | 'avif' | 'csv' | 'txt';
 
-/** Magic-byte family an extension's bytes must match. */
-type MagicFamily = 'pdf' | 'zip' | 'ole' | 'jpeg' | 'png';
+/** Magic-byte family an extension's bytes must match; text has no signature and is checked on its own. */
+type MagicFamily = 'pdf' | 'zip' | 'ole' | 'jpeg' | 'png' | 'webp' | 'isobmff' | 'text';
 
 interface AllowedType {
 	extension: AllowedExtension;
@@ -34,6 +37,8 @@ interface AllowedType {
 	openDocumentType?: string;
 	/** Stream names of a legacy compound file, any one of which must be right below its root. */
 	oleStreams?: string[];
+	/** `ftyp` brands of an ISOBMFF file, any one of which it must name as major or compatible brand. */
+	brands?: string[];
 }
 
 const ooxml = ( mainPart: string ) => [ '[content_types].xml', mainPart ];
@@ -347,6 +352,8 @@ const ODT = 'application/vnd.oasis.opendocument.text';
 const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
 const ODP = 'application/vnd.oasis.opendocument.presentation';
 const JPEG = { magic: 'jpeg', mimeTypes: [ 'image/jpeg', 'image/pjpeg' ] } as const satisfies Omit<AllowedType, 'extension'>;
+// HEIC is HEIF with HEVC images; `mif1` names HEIF without saying which codec. Sequences (`msf1`, `hevc`, `hevx`, `avis`) are left out.
+const HEVC_BRANDS = [ 'heic', 'heix', 'heim', 'heis' ];
 
 // OOXML (docx/xlsx/pptx) and OpenDocument (odt/ods/odp) files are ZIP
 // containers; legacy Office formats (doc/xls/ppt) are OLE compound files.
@@ -391,6 +398,15 @@ const ALLOWED_TYPES: readonly AllowedType[] = [
 	{ extension: 'jpg', ...JPEG },
 	{ extension: 'jpeg', ...JPEG },
 	{ extension: 'png', magic: 'png', mimeTypes: [ 'image/png' ] },
+	{ extension: 'webp', magic: 'webp', mimeTypes: [ 'image/webp' ] },
+	{ extension: 'heic', magic: 'isobmff', mimeTypes: [ 'image/heic' ], brands: HEVC_BRANDS },
+	{ extension: 'heif', magic: 'isobmff', mimeTypes: [ 'image/heif', 'image/heic' ], brands: [ ...HEVC_BRANDS, 'mif1' ] },
+	{ extension: 'avif', magic: 'isobmff', mimeTypes: [ 'image/avif' ], brands: [ 'avif' ] },
+	// Windows names the type of a CSV file after Excel.
+	{
+		extension: 'csv', magic: 'text', mimeTypes: [ 'text/csv', 'application/vnd.ms-excel', 'application/csv', 'text/x-csv', 'text/comma-separated-values', 'text/plain' ],
+	},
+	{ extension: 'txt', magic: 'text', mimeTypes: [ 'text/plain' ] },
 ];
 
 const TYPE_BY_EXTENSION = new Map<AllowedExtension, AllowedType>(
@@ -547,6 +563,12 @@ const MAGIC_SIGNATURES: Record<MagicFamily, ( bytes: Uint8Array ) => boolean> = 
 	jpeg: ( bytes ) => startsWith( bytes, [ 0xff, 0xd8, 0xff ] ),
 	// "\x89PNG\r\n\x1A\n"
 	png: ( bytes ) => startsWith( bytes, [ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a ] ),
+	// "RIFF", the size, "WEBP"
+	webp: ( bytes ) => startsWith( bytes, [ 0x52, 0x49, 0x46, 0x46 ] ) && bytes.length >= 12 &&
+		startsWith( bytes.subarray( 8 ), [ 0x57, 0x45, 0x42, 0x50 ] ),
+	// A box size, then "ftyp"
+	isobmff: ( bytes ) => bytes.length >= 8 && startsWith( bytes.subarray( 4 ), [ 0x66, 0x74, 0x79, 0x70 ] ),
+	text: () => true,
 };
 
 /** What an upload's bytes turned out to be; `macros` and `encrypted` get their own refusal messages. */
@@ -571,6 +593,13 @@ export function inspectFileContent( extension: AllowedExtension, bytes: Uint8Arr
 	}
 	if ( allowed.oleStreams ) {
 		return inspectOleFile( content, allowed.extension, allowed.oleStreams );
+	}
+	if ( allowed.magic === 'text' ) {
+		return inspectText( content, allowed.extension === 'csv' );
+	}
+	if ( allowed.brands ) {
+		const brands = readFtypBrands( content );
+		return allowed.brands.some( ( brand ) => brands.includes( brand ) ) ? 'valid' : 'mismatch';
 	}
 	if ( ! allowed.zipEntries ) {
 		return 'valid';
