@@ -5,7 +5,7 @@ import starlight from '@astrojs/starlight';
 const repository = 'https://github.com/simulieren/upload-safety';
 
 export default defineConfig( {
-	site: 'https://upload-safety-docs.systemsloop.workers.dev',
+	site: 'https://upload-safety.simonhalimonov.com',
 	integrations: [
 		starlight( {
 			title: 'upload-safety',

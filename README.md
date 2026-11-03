@@ -6,7 +6,7 @@
 [![node](https://img.shields.io/badge/node-%E2%89%A522-339933)](package.json)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![types](https://img.shields.io/badge/types-TypeScript-3178c6)](src/index.ts)
-[![docs](https://img.shields.io/badge/docs-upload--safety--docs-0f766e)](https://upload-safety-docs.systemsloop.workers.dev)
+[![docs](https://img.shields.io/badge/docs-upload--safety.simonhalimonov.com-0f766e)](https://upload-safety.simonhalimonov.com)
 
 Server-side upload checks for Node that read the file, not just its name. An upload passes only when its extension, its declared MIME type and its bytes agree, and when it carries nothing that runs on its own: no macros, embedded objects, DDE fields, PDF scripts or CSV formulas. Photos, including iPhone HEIC, lose their GPS position and other metadata on the way through.
 
@@ -47,7 +47,7 @@ Every check fails closed: a part it cannot read is a refusal, not a pass.
 - **Fast enough to run inline.** Synchronous; 647 real documents up to 20 MB each took at most 65 ms on a laptop.
 - **Tested against crafted files.** 235 tests build malformed ZIPs, compound files and PDFs byte by byte, next to real Office and PDF files.
 
-Full documentation, with a page per format: **[upload-safety-docs.systemsloop.workers.dev](https://upload-safety-docs.systemsloop.workers.dev)**.
+Full documentation, with a page per format: **[upload-safety.simonhalimonov.com](https://upload-safety.simonhalimonov.com)**.
 
 ## Install
 

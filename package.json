@@ -26,7 +26,7 @@
 		"type": "git",
 		"url": "git+https://github.com/simulieren/upload-safety.git"
 	},
-	"homepage": "https://upload-safety-docs.systemsloop.workers.dev",
+	"homepage": "https://upload-safety.simonhalimonov.com",
 	"bugs": {
 		"url": "https://github.com/simulieren/upload-safety/issues"
 	},
